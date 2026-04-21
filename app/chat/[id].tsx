@@ -66,6 +66,17 @@ export default function ChatScreen() {
         }
         break
 
+      case 'user_message_echo':
+        // User message from another client (e.g., Desktop, Feishu) - add to local messages
+        const echoMsg: Message = {
+          id: `echo-${Date.now()}`,
+          type: 'user',
+          content: lastMessage.content,
+          timestamp: new Date().toISOString(),
+        }
+        addMessage(id!, echoMsg)
+        break
+
       case 'tool_use_complete':
         const toolMsg: Message = {
           id: `tool-${Date.now()}`,
