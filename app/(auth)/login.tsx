@@ -19,11 +19,72 @@ export default function LoginScreen() {
   const { colors } = useTheme()
   const { login, setServerUrl, serverUrl } = useAuthStore()
 
+  const [mode, setMode] = useState<'pairing' | 'manual'>('pairing')
+  const [pairingCode, setPairingCode] = useState('')
   const [serverAddress, setServerAddress] = useState(serverUrl)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const handleConnect = async () => {
+  // 配对码格式: 服务器地址:配对码 (例如: 192.168.1.100:3456:ABC123)
+  const handlePairingConnect = async () => {
+    if (!pairingCode.trim()) {
+      setError('请输入配对码')
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+
+    try {
+      // 解析配对码格式: host:port:code 或 http://host:port:code
+      const parts = pairingCode.trim().split(':')
+
+      let serverAddr: string
+      let code: string
+
+      if (parts.length === 3) {
+        // 格式: host:port:code
+        const [host, port, pairCode] = parts
+        serverAddr = `http://${host}:${port}`
+        code = pairCode.toUpperCase()
+      } else if (parts.length === 4 && parts[0].startsWith('http')) {
+        // 格式: http://host:port:code (已分割)
+        const [, host, port, pairCode] = parts
+        serverAddr = `http://${host}:${port}`
+        code = pairCode.toUpperCase()
+      } else {
+        throw new Error('配对码格式错误，正确格式: 192.168.1.100:3456:ABC123')
+      }
+
+      // 验证配对码
+      const response = await fetch(`${serverAddr}/api/mobile/pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      })
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || '配对失败，请检查配对码是否正确')
+      }
+
+      // 配对成功，保存服务器地址
+      setServerUrl(serverAddr)
+
+      login(
+        { id: 'mobile-user', email: 'mobile@example.com', name: 'Mobile User' },
+        'mobile-token'
+      )
+
+      router.replace('/(tabs)/sessions')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '连接失败')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleManualConnect = async () => {
     if (!serverAddress.trim()) {
       setError('请输入服务器地址')
       return
@@ -45,7 +106,6 @@ export default function LoginScreen() {
       // Save server URL
       setServerUrl(serverAddress.trim())
 
-      // For now, simulate login (TODO: implement real auth)
       login(
         { id: 'user-1', email: 'user@example.com', name: 'User' },
         'mock-token'
@@ -75,47 +135,110 @@ export default function LoginScreen() {
           </Text>
         </View>
 
-        <View style={styles.form}>
-          <Text style={[styles.label, { color: colors.text }]}>服务器地址</Text>
-          <TextInput
-            style={[
-              styles.input,
-              { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border },
-            ]}
-            value={serverAddress}
-            onChangeText={setServerAddress}
-            placeholder="http://192.168.1.100:3456"
-            placeholderTextColor={colors.textTertiary}
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="url"
-          />
-          <Text style={[styles.hint, { color: colors.textTertiary }]}>
-            请输入桌面端服务地址（确保手机和电脑在同一网络）
-          </Text>
-
-          {error && (
-            <View style={styles.errorContainer}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
-
+        {/* Mode tabs */}
+        <View style={styles.tabContainer}>
           <TouchableOpacity
-            style={[
-              styles.button,
-              { backgroundColor: colors.primary },
-              loading && styles.buttonDisabled,
-            ]}
-            onPress={handleConnect}
-            disabled={loading}
+            style={[styles.tab, mode === 'pairing' && { borderBottomColor: colors.primary }]}
+            onPress={() => setMode('pairing')}
           >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>连接</Text>
-            )}
+            <Text style={[styles.tabText, { color: mode === 'pairing' ? colors.primary : colors.textSecondary }]}>
+              配对码连接
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.tab, mode === 'manual' && { borderBottomColor: colors.primary }]}
+            onPress={() => setMode('manual')}
+          >
+            <Text style={[styles.tabText, { color: mode === 'manual' ? colors.primary : colors.textSecondary }]}>
+              手动输入
+            </Text>
           </TouchableOpacity>
         </View>
+
+        {mode === 'pairing' ? (
+          <View style={styles.form}>
+            <Text style={[styles.label, { color: colors.text }]}>配对码</Text>
+            <TextInput
+              style={[
+                styles.input,
+                { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border },
+              ]}
+              value={pairingCode}
+              onChangeText={setPairingCode}
+              placeholder="192.168.1.100:3456:ABC123"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+            <Text style={[styles.hint, { color: colors.textTertiary }]}>
+              在桌面端设置 → IM 接入 → 移动端配对 获取配对码
+            </Text>
+
+            {error && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[
+                styles.button,
+                { backgroundColor: colors.primary },
+                loading && styles.buttonDisabled,
+              ]}
+              onPress={handlePairingConnect}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>配对连接</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.form}>
+            <Text style={[styles.label, { color: colors.text }]}>服务器地址</Text>
+            <TextInput
+              style={[
+                styles.input,
+                { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border },
+              ]}
+              value={serverAddress}
+              onChangeText={setServerAddress}
+              placeholder="http://192.168.1.100:3456"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <Text style={[styles.hint, { color: colors.textTertiary }]}>
+              请输入桌面端服务地址（确保手机和电脑在同一网络）
+            </Text>
+
+            {error && (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[
+                styles.button,
+                { backgroundColor: colors.primary },
+                loading && styles.buttonDisabled,
+              ]}
+              onPress={handleManualConnect}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>连接</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.instructions}>
           <Text style={[styles.instructionsTitle, { color: colors.text }]}>
@@ -130,13 +253,13 @@ export default function LoginScreen() {
           <View style={styles.step}>
             <Text style={[styles.stepNumber, { backgroundColor: colors.primary }]}>2</Text>
             <Text style={[styles.stepText, { color: colors.textSecondary }]}>
-              确保手机和电脑连接同一 WiFi
+              在设置 → IM 接入中生成移动端配对码
             </Text>
           </View>
           <View style={styles.step}>
             <Text style={[styles.stepNumber, { backgroundColor: colors.primary }]}>3</Text>
             <Text style={[styles.stepText, { color: colors.textSecondary }]}>
-              输入电脑的 IP 地址和端口
+              输入配对码即可连接
             </Text>
           </View>
         </View>
@@ -157,7 +280,7 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginBottom: 32,
   },
   title: {
     fontSize: 32,
@@ -166,6 +289,23 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     marginTop: 8,
+  },
+  tabContainer: {
+    flexDirection: 'row',
+    marginBottom: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150, 150, 150, 0.2)',
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    alignItems: 'center',
+  },
+  tabText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   form: {
     gap: 12,
