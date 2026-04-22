@@ -1,12 +1,22 @@
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native'
+import { useState } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, TextInput, Modal } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore } from '@/stores/authStore'
+import { useSessionStore } from '@/stores/sessionStore'
 import { useTheme } from '@/utils/theme'
+
+// 版本信息 - 每次修改后更新
+const APP_VERSION = '1.0.8'
+const BUILD_TIME = '2026-04-23 01:05'
 
 export default function SettingsScreen() {
   const router = useRouter()
   const { colors, isDark } = useTheme()
-  const { user, serverUrl, logout } = useAuthStore()
+  const { user, serverUrl, logout, setServerUrl } = useAuthStore()
+  const { sessions } = useSessionStore()
+
+  const [showUrlModal, setShowUrlModal] = useState(false)
+  const [tempUrl, setTempUrl] = useState('')
 
   const handleLogout = () => {
     Alert.alert('退出登录', '确定要退出登录吗？', [
@@ -22,21 +32,24 @@ export default function SettingsScreen() {
     ])
   }
 
-  const handleChangeServer = () => {
-    Alert.alert(
-      '更换服务器',
-      '确定要更换服务器吗？需要重新连接。',
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '确定',
-          onPress: () => {
-            logout()
-            router.replace('/(auth)/login')
-          },
-        },
-      ]
-    )
+  const handleEditUrl = () => {
+    setTempUrl(serverUrl)
+    setShowUrlModal(true)
+  }
+
+  const handleSaveUrl = () => {
+    if (tempUrl.trim()) {
+      // 确保 URL 格式正确
+      let url = tempUrl.trim()
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://' + url
+      }
+      // 移除末尾斜杠
+      url = url.replace(/\/+$/, '')
+      setServerUrl(url)
+      setShowUrlModal(false)
+      Alert.alert('成功', `服务器地址已更新为:\n${url}`)
+    }
   }
 
   return (
@@ -63,22 +76,41 @@ export default function SettingsScreen() {
           连接
         </Text>
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
-          <View style={styles.row}>
-            <Text style={[styles.label, { color: colors.text }]}>服务器地址</Text>
-            <Text
-              style={[styles.value, { color: colors.textSecondary }]}
-              numberOfLines={1}
-            >
-              {serverUrl}
-            </Text>
-          </View>
-          <TouchableOpacity
-            style={[styles.changeButton, { borderTopColor: colors.border }]}
-            onPress={handleChangeServer}
-          >
-            <Text style={[styles.changeText, { color: colors.primary }]}>
-              更换服务器
-            </Text>
+          <TouchableOpacity style={styles.urlRow} onPress={handleEditUrl}>
+            <View style={styles.urlInfo}>
+              <Text style={[styles.label, { color: colors.text }]}>服务器地址</Text>
+              <Text
+                style={[styles.urlValue, { color: colors.textSecondary }]}
+                numberOfLines={2}
+              >
+                {serverUrl}
+              </Text>
+            </View>
+            <Text style={[styles.editHint, { color: colors.primary }]}>编辑</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={[styles.hint, { color: colors.textTertiary }]}>
+          提示：可以使用 Cloudflare Tunnel 实现远程连接
+        </Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+          数据管理
+        </Text>
+        <View style={[styles.card, { backgroundColor: colors.surface }]}>
+          <TouchableOpacity style={styles.menuItem} onPress={() => router.push('/(tabs)/import' as any)}>
+            <View style={styles.menuIcon}>
+              <Text style={styles.menuIconText}>📥</Text>
+            </View>
+            <View style={styles.menuContent}>
+              <Text style={[styles.menuLabel, { color: colors.text }]}>导入对话</Text>
+              <Text style={[styles.menuHint, { color: colors.textTertiary }]}>
+                从 Cloud Code 导入对话到本地
+              </Text>
+            </View>
+            <Text style={[styles.menuArrow, { color: colors.textTertiary }]}>›</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -90,7 +122,11 @@ export default function SettingsScreen() {
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
           <View style={styles.row}>
             <Text style={[styles.label, { color: colors.text }]}>版本</Text>
-            <Text style={[styles.value, { color: colors.textSecondary }]}>1.0.0</Text>
+            <Text style={[styles.value, { color: colors.textSecondary }]}>{APP_VERSION}</Text>
+          </View>
+          <View style={[styles.row, { borderTopColor: colors.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }]}>
+            <Text style={[styles.label, { color: colors.text }]}>构建时间</Text>
+            <Text style={[styles.value, { color: colors.textSecondary }]}>{BUILD_TIME}</Text>
           </View>
           <View style={[styles.row, { borderTopColor: colors.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }]}>
             <Text style={[styles.label, { color: colors.text }]}>主题</Text>
@@ -109,8 +145,50 @@ export default function SettingsScreen() {
       </TouchableOpacity>
 
       <Text style={[styles.footer, { color: colors.textTertiary }]}>
-        Claude Code Mobile v1.0.0
+        Claude Code Mobile v{APP_VERSION} ({BUILD_TIME})
       </Text>
+
+      {/* Edit URL Modal */}
+      <Modal
+        visible={showUrlModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowUrlModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>编辑服务器地址</Text>
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+              value={tempUrl}
+              onChangeText={setTempUrl}
+              placeholder="https://your-tunnel.trycloudflare.com"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+              输入本地地址 (如 http://192.168.1.x:3456){'\n'}
+              或 Cloudflare Tunnel 地址
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.border }]}
+                onPress={() => setShowUrlModal(false)}
+              >
+                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.primary }]}
+                onPress={handleSaveUrl}
+              >
+                <Text style={styles.modalButtonText}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   )
 }
@@ -141,6 +219,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  urlRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  urlInfo: {
+    flex: 1,
+  },
   label: {
     fontSize: 16,
   },
@@ -150,14 +236,51 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     marginLeft: 16,
   },
-  changeButton: {
-    marginTop: 12,
-    paddingTop: 12,
-    alignItems: 'center',
+  urlValue: {
+    fontSize: 13,
+    marginTop: 4,
   },
-  changeText: {
+  editHint: {
     fontSize: 14,
     fontWeight: '600',
+    marginLeft: 12,
+  },
+  hint: {
+    fontSize: 12,
+    marginTop: 8,
+  },
+  // Menu item styles
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  menuIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  menuIconText: {
+    fontSize: 18,
+  },
+  menuContent: {
+    flex: 1,
+  },
+  menuLabel: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  menuHint: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  menuArrow: {
+    fontSize: 20,
+    marginLeft: 8,
   },
   logoutButton: {
     borderRadius: 12,
@@ -174,5 +297,52 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 32,
     fontSize: 12,
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 16,
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+  },
+  modalHint: {
+    fontSize: 12,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  modalButton: {
+    flex: 1,
+    padding: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 })

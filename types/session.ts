@@ -7,12 +7,12 @@ export type Session = {
   projectPath: string
   workDir: string | null
   workDirExists: boolean
-}
+} | null
 
 export type Message = {
   id: string
-  type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
-  content: unknown
+  type: string
+  content: string
   timestamp: string
-  model?: string
 }
+

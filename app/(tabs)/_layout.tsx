@@ -1,30 +1,54 @@
 import { Tabs } from 'expo-router'
-import { useColorScheme } from 'react-native'
+import { useTheme } from '@/utils/theme'
+import { TabIcon } from '@/components/TabIcon'
 
 export default function TabsLayout() {
-  const colorScheme = useColorScheme()
+  const { colors, isDark } = useTheme()
 
   return (
     <Tabs
       screenOptions={{
         tabBarStyle: {
-          backgroundColor: colorScheme === 'dark' ? '#1a1a1a' : '#ffffff',
-          borderTopColor: colorScheme === 'dark' ? '#333' : '#e5e5e5',
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          borderTopWidth: 1,
+          height: 90,
+          paddingBottom: 8,
+          paddingTop: 8,
         },
-        tabBarActiveTintColor: '#6366f1',
-        tabBarInactiveTintColor: colorScheme === 'dark' ? '#666' : '#999',
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textTertiary,
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '500',
+        },
         headerStyle: {
-          backgroundColor: colorScheme === 'dark' ? '#1a1a1a' : '#ffffff',
+          backgroundColor: colors.background,
         },
-        headerTintColor: colorScheme === 'dark' ? '#ffffff' : '#000000',
+        headerTintColor: colors.text,
+        headerTitleStyle: {
+          fontWeight: '600',
+        },
+        headerShadowVisible: false,
       }}
     >
       <Tabs.Screen
         name="sessions"
         options={{
-          title: '会话',
-          tabBarIcon: ({ color }) => (
-            <TabBarIcon name="chatbubbles" color={color} />
+          title: 'Claude Code',
+          tabBarLabel: '会话',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon icon="💬" label="会话" color={color} focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="demo"
+        options={{
+          title: '组件演示',
+          tabBarLabel: '演示',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon icon="✨" label="演示" color={color} focused={focused} />
           ),
         }}
       />
@@ -32,8 +56,9 @@ export default function TabsLayout() {
         name="settings"
         options={{
           title: '设置',
-          tabBarIcon: ({ color }) => (
-            <TabBarIcon name="settings" color={color} />
+          tabBarLabel: '设置',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon icon="⚙️" label="设置" color={color} focused={focused} />
           ),
         }}
       />
@@ -41,7 +66,3 @@ export default function TabsLayout() {
   )
 }
 
-function TabBarIcon({ name, color }: { name: string; color: string }) {
-  // Using simple text icons for now, can replace with react-native-vector-icons later
-  return null
-}

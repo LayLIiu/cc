@@ -25,7 +25,10 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // 配对码格式: 服务器地址:配对码 (例如: 192.168.1.100:3456:ABC123)
+  // 配对码格式支持:
+  // 1. 局域网: host:port:code (例如: 192.168.1.100:3456:ABC123)
+  // 2. 公网隧道: https://xxx.trycloudflare.com:code
+  // 3. 纯公网URL+码: https://xxx.trycloudflare.com::ABC123 (双冒号分隔)
   const handlePairingConnect = async () => {
     if (!pairingCode.trim()) {
       setError('请输入配对码')
@@ -36,25 +39,52 @@ export default function LoginScreen() {
     setError(null)
 
     try {
-      // 解析配对码格式: host:port:code 或 http://host:port:code
-      const parts = pairingCode.trim().split(':')
-
+      const input = pairingCode.trim()
       let serverAddr: string
       let code: string
 
-      if (parts.length === 3) {
-        // 格式: host:port:code
-        const [host, port, pairCode] = parts
-        serverAddr = `http://${host}:${port}`
-        code = pairCode.toUpperCase()
-      } else if (parts.length === 4 && parts[0].startsWith('http')) {
-        // 格式: http://host:port:code (已分割)
-        const [, host, port, pairCode] = parts
-        serverAddr = `http://${host}:${port}`
-        code = pairCode.toUpperCase()
-      } else {
-        throw new Error('配对码格式错误，正确格式: 192.168.1.100:3456:ABC123')
+      // 格式1: 公网隧道 URL + 双冒号分隔码 (推荐)
+      // 例如: https://xxx.trycloudflare.com::ABC123
+      if (input.includes('::')) {
+        const [url, pairCode] = input.split('::')
+        serverAddr = url.trim()
+        code = pairCode.trim().toUpperCase()
       }
+      // 格式2: 公网隧道 URL + 单冒号分隔码
+      // 例如: https://xxx.trycloudflare.com:ABC123
+      else if (input.startsWith('https://') || input.startsWith('http://')) {
+        // 找到最后一个冒号位置
+        const lastColonIndex = input.lastIndexOf(':')
+        if (lastColonIndex > 8) { // 确保不是 http(s):// 后的冒号
+          serverAddr = input.substring(0, lastColonIndex)
+          code = input.substring(lastColonIndex + 1).toUpperCase()
+        } else {
+          throw new Error('公网地址格式错误，请使用: https://xxx.trycloudflare.com:ABC123 或 https://xxx.trycloudflare.com::ABC123')
+        }
+      }
+      // 格式3: 局域网地址 host:port:code
+      // 例如: 192.168.1.100:3456:ABC123
+      else {
+        const parts = input.split(':')
+        if (parts.length === 3) {
+          const [host, port, pairCode] = parts
+          serverAddr = `http://${host}:${port}`
+          code = pairCode.toUpperCase()
+        } else if (parts.length === 4 && (parts[0] === 'http' || parts[0] === 'https')) {
+          // 格式: http:host:port:code (已分割)
+          const [, host, port, pairCode] = parts
+          serverAddr = `http://${host}:${port}`
+          code = pairCode.toUpperCase()
+        } else {
+          throw new Error('配对码格式错误\n局域网: 192.168.1.100:3456:ABC123\n公网: https://xxx.trycloudflare.com:ABC123')
+        }
+      }
+
+      if (!code || code.length < 4) {
+        throw new Error('配对码无效，请检查格式')
+      }
+
+      console.log('Connecting to:', serverAddr, 'with code:', code)
 
       // 验证配对码
       const response = await fetch(`${serverAddr}/api/mobile/pair`, {
@@ -165,13 +195,13 @@ export default function LoginScreen() {
               ]}
               value={pairingCode}
               onChangeText={setPairingCode}
-              placeholder="192.168.1.100:3456:ABC123"
+              placeholder="粘贴连接串或 IP:端口:配对码"
               placeholderTextColor={colors.textTertiary}
               autoCapitalize="characters"
               autoCorrect={false}
             />
             <Text style={[styles.hint, { color: colors.textTertiary }]}>
-              在桌面端设置 → IM 接入 → 移动端配对 获取配对码
+              支持局域网或公网隧道连接，在桌面端获取配对码
             </Text>
 
             {error && (
@@ -253,13 +283,19 @@ export default function LoginScreen() {
           <View style={styles.step}>
             <Text style={[styles.stepNumber, { backgroundColor: colors.primary }]}>2</Text>
             <Text style={[styles.stepText, { color: colors.textSecondary }]}>
-              在设置 → IM 接入中生成移动端配对码
+              设置 → IM 接入 → 生成配对码
             </Text>
           </View>
           <View style={styles.step}>
             <Text style={[styles.stepNumber, { backgroundColor: colors.primary }]}>3</Text>
             <Text style={[styles.stepText, { color: colors.textSecondary }]}>
-              输入配对码即可连接
+              局域网：输入 IP:端口:配对码
+            </Text>
+          </View>
+          <View style={styles.step}>
+            <Text style={[styles.stepNumber, { backgroundColor: colors.primary }]}>4</Text>
+            <Text style={[styles.stepText, { color: colors.textSecondary }]}>
+              公网：粘贴完整连接串
             </Text>
           </View>
         </View>

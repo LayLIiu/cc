@@ -7,8 +7,9 @@ import {
   Platform,
   ActivityIndicator,
   Text,
+  RefreshControl,
 } from 'react-native'
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router'
+import { useLocalSearchParams, Stack } from 'expo-router'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { MessageBubble } from '@/components/MessageBubble'
@@ -16,28 +17,63 @@ import { ChatInput } from '@/components/ChatInput'
 import { useTheme } from '@/utils/theme'
 import type { Message } from '@/types/session'
 
-type ChatState = 'idle' | 'thinking' | 'streaming' | 'tool_executing'
+// 版本信息
+const SCREEN_VERSION = 'v1.0.7 - 00:35'
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
-  const router = useRouter()
   const { colors } = useTheme()
 
-  const { messages, fetchMessages, addMessage, sessions } = useSessionStore()
-  const session = sessions.find(s => s.id === id)
+  const {
+    messages,
+    fetchMessages,
+    refreshMessages,
+    addMessage,
+    updateLastAssistantMessage,
+    sessions,
+    fetchSessions,
+    isRefreshing,
+  } = useSessionStore()
 
-  const [chatState, setChatState] = useState<ChatState>('idle')
+  // Debug: log sessions and current id
+  useEffect(() => {
+    console.log('[Chat] Current session id:', id)
+    console.log('[Chat] Sessions count:', sessions.length)
+    console.log('[Chat] Sessions:', sessions.map(s => ({ id: s?.id, title: s?.title })))
+  }, [id, sessions])
+
+  const session = sessions.find((s): s is NonNullable<typeof s> => s?.id === id)
+
+  // Debug: log found session
+  useEffect(() => {
+    if (session) {
+      console.log('[Chat] Found session:', session.id, session.title)
+    } else {
+      console.log('[Chat] Session not found for id:', id)
+    }
+  }, [session, id])
+
+  // Fetch sessions to get title
+  useEffect(() => {
+    if (id && sessions.length === 0) {
+      fetchSessions()
+    }
+  }, [id, sessions.length, fetchSessions])
+
+  const [isLoading, setIsLoading] = useState(false)
   const [streamingText, setStreamingText] = useState('')
-  const [streamingMessages, setStreamingMessages] = useState<Message[]>([])
 
   const flatListRef = useRef<FlatList>(null)
+  const processedIds = useRef(new Set<string>())
+  const currentAssistantId = useRef<string | null>(null)
 
-  const { status, lastMessage, send } = useWebSocket(id)
+  const { status, lastMessage, clearLastMessage, send } = useWebSocket(id)
 
   // Fetch messages on mount
   useEffect(() => {
     if (id) {
-      fetchMessages(id)
+      setIsLoading(true)
+      fetchMessages(id).finally(() => setIsLoading(false))
     }
   }, [id, fetchMessages])
 
@@ -45,12 +81,24 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!lastMessage) return
 
+    const msgId = JSON.stringify(lastMessage)
+    if (processedIds.current.has(msgId)) {
+      clearLastMessage()
+      return
+    }
+    processedIds.current.add(msgId)
+    if (processedIds.current.size > 50) {
+      processedIds.current = new Set(Array.from(processedIds.current).slice(-30))
+    }
+
+    console.log(`[Chat ${SCREEN_VERSION}] WS received:`, lastMessage.type, lastMessage.content?.substring?.(0, 50) || '')
+
     switch (lastMessage.type) {
-      case 'status':
-        setChatState(lastMessage.state)
-        if (lastMessage.state === 'idle') {
-          setStreamingText('')
-          setStreamingMessages([])
+      case 'connected':
+        // Connection established, refresh messages to sync
+        console.log('[Chat] Connected, refreshing messages for session:', id)
+        if (id) {
+          refreshMessages(id)
         }
         break
 
@@ -60,146 +108,144 @@ export default function ChatScreen() {
         }
         break
 
-      case 'content_start':
-        if (lastMessage.blockType === 'text') {
+      case 'message_complete':
+        // Save the complete assistant message
+        const content = lastMessage.content || streamingText
+        if (content) {
+          const assistantMsg: Message = {
+            id: lastMessage.id || `assistant-${Date.now()}`,
+            type: 'assistant_text',
+            content: typeof content === 'string' ? content : '',
+            timestamp: String(Date.now()),
+          }
+          addMessage(id!, assistantMsg)
           setStreamingText('')
         }
         break
 
       case 'user_message_echo':
-        // User message from another client (e.g., Desktop, Feishu) - add to local messages
-        const echoMsg: Message = {
-          id: `echo-${Date.now()}`,
-          type: 'user',
-          content: lastMessage.content,
-          timestamp: new Date().toISOString(),
+        // User message from another client - refresh to get full history
+        console.log('[Chat] Received user_message_echo, refreshing messages')
+        if (id) {
+          refreshMessages(id)
         }
-        addMessage(id!, echoMsg)
         break
 
-      case 'tool_use_complete':
-        const toolMsg: Message = {
-          id: `tool-${Date.now()}`,
-          type: 'tool_use',
-          content: {
-            name: lastMessage.toolName,
-            input: lastMessage.input,
-          },
-          timestamp: new Date().toISOString(),
-        }
-        setStreamingMessages(prev => [...prev, toolMsg])
-        break
-
-      case 'tool_result':
-        const resultMsg: Message = {
-          id: `result-${Date.now()}`,
-          type: 'tool_result',
-          content: lastMessage.content,
-          timestamp: new Date().toISOString(),
-        }
-        setStreamingMessages(prev => [...prev, resultMsg])
-        break
-
-      case 'message_complete':
-        if (lastMessage.usage) {
-          // Message complete - streaming text becomes a message
-          if (streamingText) {
-            const assistantMsg: Message = {
-              id: `msg-${Date.now()}`,
-              type: 'assistant',
-              content: streamingText,
-              timestamp: new Date().toISOString(),
-            }
-            addMessage(id!, assistantMsg)
+      case 'assistant_text':
+        // Full assistant message (from another client or history)
+        if (lastMessage.content && id) {
+          const assistantMsg: Message = {
+            id: lastMessage.id || `assistant-${Date.now()}`,
+            type: 'assistant_text',
+            content: lastMessage.content,
+            timestamp: lastMessage.timestamp || String(Date.now()),
           }
-          setStreamingText('')
-          setStreamingMessages([])
-          setChatState('idle')
+          addMessage(id, assistantMsg)
         }
         break
+
+      case 'status':
+        // Status update (thinking, idle, etc.)
+        console.log('[Chat] Status:', lastMessage.state)
+        break
+
+      case 'error':
+        console.error('[Chat] Server error:', lastMessage.message)
+        break
+
+      default:
+        console.log('[Chat] Unknown message type:', lastMessage.type)
     }
-  }, [lastMessage, id, streamingText, addMessage])
+
+    clearLastMessage()
+  }, [lastMessage, id, addMessage, streamingText, clearLastMessage, refreshMessages])
 
   const handleSend = useCallback((content: string) => {
     if (!content.trim()) return
 
-    // Add user message
+    // Add user message locally
     const userMsg: Message = {
       id: `user-${Date.now()}`,
-      type: 'user',
-      content,
-      timestamp: new Date().toISOString(),
+      type: 'user_text',
+      content: content.trim(),
+      timestamp: String(Date.now()),
     }
     addMessage(id!, userMsg)
 
     // Send to server
-    send({ type: 'user_message', content })
-    setChatState('thinking')
+    send({ type: 'user_message', content: content.trim() })
+    setStreamingText('')
   }, [id, addMessage, send])
 
-  // Combine persisted messages with streaming messages
+  const handleRefresh = useCallback(() => {
+    if (id) {
+      refreshMessages(id)
+    }
+  }, [id, refreshMessages])
+
+  // Combine stored messages with streaming text
   const allMessages = [
     ...(messages[id!] || []),
-    ...streamingMessages,
     ...(streamingText ? [{
       id: 'streaming',
-      type: 'assistant' as const,
+      type: 'assistant_text' as const,
       content: streamingText,
-      timestamp: new Date().toISOString(),
+      timestamp: String(Date.now()),
     }] : []),
   ]
-
-  const sessionTitle = session?.title || '对话'
 
   return (
     <>
       <Stack.Screen
         options={{
-          title: sessionTitle,
+          title: session?.title || '对话',
           headerBackTitle: '返回',
         }}
       />
       <KeyboardAvoidingView
         style={[styles.container, { backgroundColor: colors.background }]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={90}
+        keyboardVerticalOffset={100}
       >
-        {status === 'connecting' ? (
+        {isLoading ? (
           <View style={styles.center}>
             <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={[styles.connectingText, { color: colors.textSecondary }]}>
-              连接中...
-            </Text>
           </View>
         ) : (
           <>
+            {/* Debug info bar */}
+            <View style={[styles.debugBar, { backgroundColor: colors.surface }]}>
+              <Text style={[styles.debugText, { color: colors.textSecondary }]}>
+                {SCREEN_VERSION} | WS: {status} | {allMessages.length} msgs
+              </Text>
+              <View style={[styles.statusDot, { backgroundColor: status === 'connected' ? '#22c55e' : '#ef4444' }]} />
+            </View>
+
             <FlatList
               ref={flatListRef}
               data={allMessages}
               keyExtractor={(item) => item.id}
-              renderItem={({ item }) => <MessageBubble message={item} />}
+              renderItem={({ item, index }) => (
+                <MessageBubble
+                  message={item}
+                  isLast={index === allMessages.length - 1}
+                />
+              )}
               contentContainerStyle={styles.listContent}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
-              ListFooterComponent={
-                chatState === 'thinking' ? (
-                  <View style={styles.typing}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={[styles.typingText, { color: colors.textSecondary }]}>
-                      思考中...
-                    </Text>
-                  </View>
-                ) : null
+              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+              refreshControl={
+                <RefreshControl
+                  refreshing={isRefreshing}
+                  onRefresh={handleRefresh}
+                  tintColor={colors.primary}
+                  colors={[colors.primary]}
+                />
               }
             />
 
             <ChatInput
               onSend={handleSend}
-              disabled={chatState !== 'idle'}
-              placeholder={
-                chatState === 'thinking' ? '等待回复...' :
-                chatState === 'streaming' ? '正在生成...' :
-                '输入消息...'
-              }
+              placeholder="发送消息..."
             />
           </>
         )}
@@ -209,30 +255,24 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  connectingText: {
-    marginTop: 12,
-    fontSize: 14,
-  },
-  listContent: {
-    padding: 16,
-    paddingBottom: 8,
-  },
-  typing: {
+  container: { flex: 1 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  debugBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    gap: 8,
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150, 150, 150, 0.2)',
   },
-  typingText: {
-    fontSize: 14,
+  debugText: {
+    fontSize: 10,
+    marginRight: 6,
   },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  listContent: { padding: 16, paddingBottom: 8 },
 })

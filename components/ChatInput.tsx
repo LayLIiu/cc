@@ -1,36 +1,31 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import {
   View,
+  Text,
   TextInput,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
 } from 'react-native'
 import { useTheme } from '@/utils/theme'
 
 type ChatInputProps = {
   onSend: (message: string) => void
-  disabled?: boolean
   placeholder?: string
 }
 
-export function ChatInput({ onSend, disabled, placeholder = '输入消息...' }: ChatInputProps) {
+export function ChatInput({ onSend, placeholder = '发送消息...' }: ChatInputProps) {
   const { colors } = useTheme()
   const [text, setText] = useState('')
-  const inputRef = useRef<TextInput>(null)
 
   const handleSend = () => {
-    if (!text.trim() || disabled) return
+    if (!text.trim()) return
     onSend(text.trim())
     setText('')
   }
 
-  const canSend = text.trim().length > 0 && !disabled
-
   return (
     <View style={[styles.container, { borderTopColor: colors.border }]}>
       <TextInput
-        ref={inputRef}
         style={[styles.input, { backgroundColor: colors.surface, color: colors.text }]}
         value={text}
         onChangeText={setText}
@@ -38,22 +33,12 @@ export function ChatInput({ onSend, disabled, placeholder = '输入消息...' }:
         placeholderTextColor={colors.textTertiary}
         multiline
         maxLength={4000}
-        editable={!disabled}
       />
       <TouchableOpacity
-        style={[
-          styles.sendButton,
-          { backgroundColor: colors.primary },
-          !canSend && styles.sendButtonDisabled,
-        ]}
+        style={[styles.sendButton, { backgroundColor: colors.primary }]}
         onPress={handleSend}
-        disabled={!canSend}
       >
-        {disabled ? (
-          <ActivityIndicator size="small" color="#ffffff" />
-        ) : (
-          <Text style={styles.sendText}>发送</Text>
-        )}
+        <Text style={styles.sendText}>发送</Text>
       </TouchableOpacity>
     </View>
   )
@@ -62,9 +47,9 @@ export function ChatInput({ onSend, disabled, placeholder = '输入消息...' }:
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    padding: 12,
+    padding: 16,
     borderTopWidth: 1,
-    gap: 8,
+    gap: 10,
   },
   input: {
     flex: 1,
@@ -72,21 +57,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     fontSize: 16,
-    maxHeight: 120,
+    maxHeight: 100,
   },
   sendButton: {
-    paddingHorizontal: 20,
-    borderRadius: 20,
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 24,
     justifyContent: 'center',
-    minWidth: 70,
     alignItems: 'center',
   },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
   sendText: {
-    color: '#ffffff',
-    fontSize: 16,
+    color: '#fff',
+    fontSize: 18,
     fontWeight: '600',
   },
 })

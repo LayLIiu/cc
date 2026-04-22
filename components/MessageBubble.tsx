@@ -1,103 +1,79 @@
 import { View, Text, StyleSheet } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import type { Message } from '@/types/session'
+import { MarkdownRenderer } from './index'
 
 type MessageBubbleProps = {
   message: Message
+  isLast?: boolean
 }
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   const { colors } = useTheme()
-  const isUser = message.type === 'user'
-  const isTool = message.type === 'tool_use' || message.type === 'tool_result'
 
-  const getContent = () => {
-    if (typeof message.content === 'string') {
-      return message.content
-    }
-    if (message.content && typeof message.content === 'object') {
-      // Tool use
-      if (message.type === 'tool_use') {
-        const input = (message.content as any).input
-        const toolName = (message.content as any).name || 'Tool'
-        if (toolName === 'Bash' && input?.command) {
-          return `🖥️ ${input.command}`
-        }
-        if (input?.file_path) {
-          return `📄 ${input.file_path}`
-        }
-        return `🔧 ${toolName}`
-      }
-      // Tool result
-      if (message.type === 'tool_result') {
-        return '✅ 完成'
-      }
-      return JSON.stringify(message.content, null, 2)
-    }
-    return ''
-  }
-
-  const content = getContent()
-
-  if (isTool) {
+  // User message - right side, primary color
+  if (message.type === 'user_text') {
     return (
-      <View style={[styles.toolContainer, { backgroundColor: colors.surface }]}>
-        <Text style={[styles.toolText, { color: colors.textSecondary }]}>
-          {content}
-        </Text>
+      <View style={[styles.userWrapper, isLast && styles.lastMessage]}>
+        <View style={[styles.userBubble, { backgroundColor: colors.primary }]}>
+          <Text style={styles.userText}>{message.content}</Text>
+        </View>
       </View>
     )
   }
 
+  // Assistant message - left side, with markdown
+  if (message.type === 'assistant_text') {
+    return (
+      <View style={[styles.assistantWrapper, isLast && styles.lastMessage]}>
+        <View style={[styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <MarkdownRenderer content={message.content} />
+        </View>
+      </View>
+    )
+  }
+
+  // Other types - just show as text on left
   return (
-    <View
-      style={[
-        styles.container,
-        isUser
-          ? [styles.userContainer, { backgroundColor: colors.primary }]
-          : [styles.assistantContainer, { backgroundColor: colors.surface }],
-      ]}
-    >
-      <Text
-        style={[
-          styles.text,
-          { color: isUser ? '#ffffff' : colors.text },
-        ]}
-      >
-        {content}
-      </Text>
+    <View style={[styles.assistantWrapper, isLast && styles.lastMessage]}>
+      <View style={[styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Text style={{ color: colors.text }}>{message.content}</Text>
+      </View>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: {
-    maxWidth: '85%',
-    padding: 12,
-    borderRadius: 16,
-    marginBottom: 8,
+  userWrapper: {
+    alignItems: 'flex-end',
+    marginBottom: 12,
   },
-  userContainer: {
-    alignSelf: 'flex-end',
+  lastMessage: {
+    marginBottom: 0,
+  },
+  userBubble: {
+    maxWidth: '85%',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 18,
     borderBottomRightRadius: 4,
   },
-  assistantContainer: {
-    alignSelf: 'flex-start',
-    borderBottomLeftRadius: 4,
-  },
-  text: {
+  userText: {
     fontSize: 15,
     lineHeight: 22,
+    color: '#fff',
   },
-  toolContainer: {
-    alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginBottom: 4,
+
+  assistantWrapper: {
+    alignItems: 'flex-start',
+    marginBottom: 12,
   },
-  toolText: {
-    fontSize: 13,
-    fontFamily: 'monospace',
+  assistantBubble: {
+    maxWidth: '85%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderBottomLeftRadius: 8,
+    borderWidth: 1,
   },
 })

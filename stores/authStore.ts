@@ -12,12 +12,15 @@ type AuthState = {
   user: User | null
   token: string | null
   serverUrl: string
+  tunnelUrl: string | null
   isLoggedIn: boolean
   isHydrated: boolean
 
   login: (user: User, token: string) => void
   logout: () => void
   setServerUrl: (url: string) => void
+  setTunnelUrl: (url: string) => void
+  setHydrated: () => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -25,7 +28,8 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       user: null,
       token: null,
-      serverUrl: 'http://127.0.0.1:3456',
+      serverUrl: 'http://192.168.3.33:3456',
+      tunnelUrl: null,
       isLoggedIn: false,
       isHydrated: false,
 
@@ -34,13 +38,26 @@ export const useAuthStore = create<AuthState>()(
       logout: () => set({ user: null, token: null, isLoggedIn: false }),
 
       setServerUrl: (url) => set({ serverUrl: url }),
+
+      setTunnelUrl: (url) => set({ tunnelUrl: url }),
+
+      setHydrated: () => set({ isHydrated: true }),
     }),
     {
       name: 'auth-storage',
       storage: createJSONStorage(() => AsyncStorage),
       onRehydrateStorage: () => (state) => {
-        state!.isHydrated = true
+        if (state) {
+          state.isHydrated = true
+        }
       },
+      partialize: (state) => ({
+        user: state.user,
+        token: state.token,
+        serverUrl: state.serverUrl,
+        tunnelUrl: state.tunnelUrl,
+        isLoggedIn: state.isLoggedIn,
+      }),
     }
   )
 )
