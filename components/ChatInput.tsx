@@ -26,7 +26,7 @@ export function ChatInput({ onSend, placeholder = '发送消息...', chatStatus 
   }
 
   return (
-    <View style={[styles.container, { borderTopColor: colors.border }]}>
+    <View style={[styles.container, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
       {/* 戴安娜 Logo */}
       <View style={styles.logoContainer}>
         <ClaudeLogoWidget

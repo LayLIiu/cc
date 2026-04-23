@@ -393,15 +393,6 @@ export default function ChatScreen() {
     ...(messages[id!] || []).slice().reverse(),
   ]
 
-  // Status indicator text
-  const statusText = chatStatus !== 'idle' && statusVerb
-    ? statusVerb
-    : chatStatus === 'thinking' ? '思考中...'
-    : chatStatus === 'streaming' ? '生成中...'
-    : chatStatus === 'tool_executing' ? '执行工具...'
-    : chatStatus === 'permission_pending' ? '等待权限...'
-    : ''
-
   return (
     <>
       <Stack.Screen
@@ -421,19 +412,6 @@ export default function ChatScreen() {
           </View>
         ) : (
           <>
-            {/* Status bar */}
-            <View style={[styles.debugBar, { backgroundColor: colors.surface }]}>
-              <Text style={[styles.debugText, { color: colors.textSecondary }]}>
-                WS: {status} | {allMessages.length} msgs
-              </Text>
-              {statusText ? (
-                <Text style={[styles.statusText, { color: colors.primary }]}>
-                  {statusText}
-                </Text>
-              ) : null}
-              <View style={[styles.statusDot, { backgroundColor: status === 'connected' ? '#22c55e' : '#ef4444' }]} />
-            </View>
-
             <FlatList
               ref={flatListRef}
               data={allMessages}
@@ -445,7 +423,7 @@ export default function ChatScreen() {
                   isLast={index === allMessages.length - 1}
                 />
               )}
-              contentContainerStyle={styles.listContent}
+              contentContainerStyle={[styles.listContent, { backgroundColor: colors.background }]}
               refreshControl={
                 <RefreshControl
                   refreshing={isLoading}
@@ -479,27 +457,5 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  debugBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(150, 150, 150, 0.2)',
-    gap: 6,
-  },
-  debugText: {
-    fontSize: 10,
-  },
-  statusText: {
-    fontSize: 11,
-    fontWeight: '500',
-    flex: 1,
-  },
-  statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
   listContent: { padding: 16, paddingBottom: 8 },
 })
