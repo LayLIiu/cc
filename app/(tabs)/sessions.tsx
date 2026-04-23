@@ -165,6 +165,7 @@ export default function SessionsScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* New Session Button */}
       <View style={styles.header}>
+        <Text style={[styles.pageTitle, { color: colors.text }]}>会话</Text>
         <TouchableOpacity
           style={[styles.newButton, { backgroundColor: colors.primary }]}
           onPress={handleNewSession}
@@ -336,6 +337,11 @@ const styles = StyleSheet.create({
   header: {
     padding: 16,
     paddingBottom: 0,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    marginBottom: 12,
   },
   newButton: {
     borderRadius: 12,

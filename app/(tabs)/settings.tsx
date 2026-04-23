@@ -63,6 +63,9 @@ export default function SettingsScreen() {
       style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.content}
     >
+      {/* Page Title */}
+      <Text style={[styles.pageTitle, { color: colors.text }]}>设置</Text>
+
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
           账户
@@ -233,6 +236,11 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    marginBottom: 20,
   },
   section: {
     marginBottom: 24,
