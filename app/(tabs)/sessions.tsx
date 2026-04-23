@@ -177,6 +177,7 @@ export default function SessionsScreen() {
       <FlatList
         data={groups}
         keyExtractor={(item) => item.title}
+        style={{ backgroundColor: colors.background }}
         renderItem={({ item: group }) => (
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>

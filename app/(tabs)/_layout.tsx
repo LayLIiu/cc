@@ -23,7 +23,19 @@ export default function TabsLayout() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Custom Segmented Tab */}
+      {/* Page content */}
+      <Tabs
+        screenOptions={{
+          tabBarStyle: { display: 'none' },
+          headerShown: false,
+          contentStyle: { backgroundColor: 'transparent' },
+        }}
+      >
+        <Tabs.Screen name="sessions" />
+        <Tabs.Screen name="settings" />
+      </Tabs>
+
+      {/* Bottom Segmented Tab */}
       <View style={styles.tabContainer}>
         <SegmentedTab
           tabs={tabs}
@@ -31,17 +43,6 @@ export default function TabsLayout() {
           onTabPress={handleTabPress}
         />
       </View>
-
-      {/* Hidden native tabs - just for routing */}
-      <Tabs
-        screenOptions={{
-          tabBarStyle: { display: 'none' },
-          headerShown: false,
-        }}
-      >
-        <Tabs.Screen name="sessions" />
-        <Tabs.Screen name="settings" />
-      </Tabs>
     </View>
   )
 }
@@ -51,6 +52,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   tabContainer: {
-    paddingTop: 50,
+    paddingBottom: 20,
+    paddingTop: 8,
   },
 })
