@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar'
 import * as NavigationBar from 'expo-navigation-bar'
 import { Platform } from 'react-native'
 import { useTheme } from '@/utils/theme'
+import { setWindowBackground } from '@/utils/windowBackground'
 
 export default function RootLayout() {
   const { isDark, colors } = useTheme()
@@ -13,8 +14,10 @@ export default function RootLayout() {
     if (Platform.OS === 'android') {
       NavigationBar.setBackgroundColorAsync(colors.surface)
       NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark')
+      // 设置原生窗口背景色，解决深色模式下页面跳转白色闪烁
+      setWindowBackground(colors.background)
     }
-  }, [isDark, colors.surface])
+  }, [isDark, colors.background, colors.surface])
 
   return (
     <>

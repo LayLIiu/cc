@@ -1,19 +1,22 @@
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Alert } from 'react-native'
-import { useRef, useState } from 'react'
+import React, { useState, memo } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Modal } from 'react-native'
 import { useTheme } from '@/utils/theme'
-import type { Session } from '@/types/session'
+import type { Session, SessionStatus } from '@/types/session'
+import { ClaudeLogoWidget } from './shared/ClaudeLogoWidget'
 
 type SessionItemProps = {
   session: Session
   onPress: () => void
   onDelete?: () => void
   isActive?: boolean
+  status?: SessionStatus
 }
 
-export function SessionItem({ session, onPress, onDelete, isActive }: SessionItemProps) {
+const SessionItemComponent = ({ session, onPress, onDelete, isActive, status = 'idle' }: SessionItemProps) => {
   const { colors } = useTheme()
   const [translateX] = useState(new Animated.Value(0))
   const [isSwipeOpen, setIsSwipeOpen] = useState(false)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
 
   if (!session) return null
 
@@ -64,21 +67,18 @@ export function SessionItem({ session, onPress, onDelete, isActive }: SessionIte
   }
 
   const handleDelete = () => {
-    Alert.alert(
-      '删除对话',
-      '确定要删除这个对话吗？',
-      [
-        { text: '取消', style: 'cancel', onPress: closeSwipe },
-        {
-          text: '删除',
-          style: 'destructive',
-          onPress: () => {
-            closeSwipe()
-            onDelete?.()
-          },
-        },
-      ]
-    )
+    setShowDeleteModal(true)
+  }
+
+  const handleConfirmDelete = () => {
+    setShowDeleteModal(false)
+    closeSwipe()
+    onDelete?.()
+  }
+
+  const handleCancelDelete = () => {
+    setShowDeleteModal(false)
+    closeSwipe()
   }
 
   return (
@@ -111,17 +111,33 @@ export function SessionItem({ session, onPress, onDelete, isActive }: SessionIte
           onLongPress={handleToggleSwipe}
           activeOpacity={0.7}
         >
+          {/* 状态图标 */}
           <View style={styles.iconContainer}>
-            <Text style={styles.icon}>💬</Text>
+            {status !== 'idle' ? (
+              <ClaudeLogoWidget
+                size={28}
+                forceMode="thinking"
+              />
+            ) : (
+              <Text style={styles.icon}>💬</Text>
+            )}
           </View>
 
           <View style={styles.content}>
-            <Text
-              style={[styles.title, { color: colors.text }]}
-              numberOfLines={1}
-            >
-              {session.title || '新对话'}
-            </Text>
+            <View style={styles.titleRow}>
+              <Text
+                style={[styles.title, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {session.title || '新对话'}
+              </Text>
+              {/* 状态标签 */}
+              {status !== 'idle' && (
+                <View style={[styles.statusBadge, { backgroundColor: colors.primary + '20' }]}>
+                  <Text style={[styles.statusText, { color: colors.primary }]}>工作中</Text>
+                </View>
+              )}
+            </View>
 
             <View style={styles.metaRow}>
               {projectName && (
@@ -149,9 +165,42 @@ export function SessionItem({ session, onPress, onDelete, isActive }: SessionIte
           </TouchableOpacity>
         </TouchableOpacity>
       </Animated.View>
+
+      {/* Delete confirmation modal */}
+      <Modal
+        visible={showDeleteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelDelete}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>删除对话</Text>
+            <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
+              确定要删除这个对话吗？
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.surfaceContainer }]}
+                onPress={handleCancelDelete}
+              >
+                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.error }]}
+                onPress={handleConfirmDelete}
+              >
+                <Text style={styles.modalButtonTextWhite}>删除</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
+
+export const SessionItem = memo(SessionItemComponent)
 
 const styles = StyleSheet.create({
   wrapper: {
@@ -208,10 +257,25 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   title: {
     fontSize: 15,
     fontWeight: '500',
     lineHeight: 20,
+    flex: 1,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
   metaRow: {
     flexDirection: 'row',
@@ -237,5 +301,50 @@ const styles = StyleSheet.create({
   },
   swipeHintText: {
     fontSize: 12,
+  },
+  // Delete modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    width: '100%',
+    maxWidth: 320,
+    borderRadius: 16,
+    padding: 24,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalMessage: {
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalButtonTextWhite: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 })

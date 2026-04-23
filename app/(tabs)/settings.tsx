@@ -1,13 +1,13 @@
 import { useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, TextInput, Modal } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, Modal } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore, type ThemeMode } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useTheme } from '@/utils/theme'
 
 // 版本信息 - 每次修改后更新
-const APP_VERSION = '1.0.9'
-const BUILD_TIME = '2026-04-23 08:41'
+const APP_VERSION = '1.1.0'
+const BUILD_TIME = '2026-04-23 09:35'
 
 const THEME_OPTIONS: { mode: ThemeMode; label: string; icon: string }[] = [
   { mode: 'light', label: '浅色', icon: '☀️' },
@@ -22,20 +22,18 @@ export default function SettingsScreen() {
   const { sessions } = useSessionStore()
 
   const [showUrlModal, setShowUrlModal] = useState(false)
+  const [showThemeModal, setShowThemeModal] = useState(false)
+  const [showLogoutModal, setShowLogoutModal] = useState(false)
   const [tempUrl, setTempUrl] = useState('')
 
   const handleLogout = () => {
-    Alert.alert('退出登录', '确定要退出登录吗？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '退出',
-        style: 'destructive',
-        onPress: () => {
-          logout()
-          router.replace('/(auth)/login')
-        },
-      },
-    ])
+    setShowLogoutModal(true)
+  }
+
+  const handleConfirmLogout = () => {
+    setShowLogoutModal(false)
+    logout()
+    router.replace('/(auth)/login')
   }
 
   const handleEditUrl = () => {
@@ -108,15 +106,7 @@ export default function SettingsScreen() {
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
           <TouchableOpacity
             style={styles.urlRow}
-            onPress={() =>
-              Alert.alert('选择主题', undefined, [
-                ...THEME_OPTIONS.map((opt) => ({
-                  text: `${opt.icon} ${opt.label}`,
-                  onPress: () => setThemeMode(opt.mode),
-                })),
-                { text: '取消', style: 'cancel' },
-              ])
-            }
+            onPress={() => setShowThemeModal(true)}
           >
             <View style={styles.urlInfo}>
               <Text style={[styles.label, { color: colors.text }]}>主题</Text>
@@ -217,7 +207,82 @@ export default function SettingsScreen() {
                 style={[styles.modalButton, { backgroundColor: colors.primary }]}
                 onPress={handleSaveUrl}
               >
-                <Text style={styles.modalButtonText}>保存</Text>
+                <Text style={styles.modalButtonTextWhite}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Theme Selection Modal */}
+      <Modal
+        visible={showThemeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowThemeModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>选择主题</Text>
+            {THEME_OPTIONS.map((opt) => (
+              <TouchableOpacity
+                key={opt.mode}
+                style={[
+                  styles.themeOption,
+                  {
+                    backgroundColor: themeMode === opt.mode ? colors.primary + '20' : colors.background,
+                    borderColor: themeMode === opt.mode ? colors.primary : colors.border,
+                  },
+                ]}
+                onPress={() => {
+                  setThemeMode(opt.mode)
+                  setShowThemeModal(false)
+                }}
+              >
+                <Text style={styles.themeIcon}>{opt.icon}</Text>
+                <Text style={[styles.themeLabel, { color: colors.text }]}>
+                  {opt.label}
+                </Text>
+                {themeMode === opt.mode && (
+                  <Text style={[styles.themeCheck, { color: colors.primary }]}>✓</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: colors.surfaceContainer, marginTop: 8 }]}
+              onPress={() => setShowThemeModal(false)}
+            >
+              <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Logout Confirmation Modal */}
+      <Modal
+        visible={showLogoutModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowLogoutModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>退出登录</Text>
+            <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
+              确定要退出登录吗？
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.surfaceContainer }]}
+                onPress={() => setShowLogoutModal(false)}
+              >
+                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.error }]}
+                onPress={handleConfirmLogout}
+              >
+                <Text style={styles.modalButtonTextWhite}>退出</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -352,6 +417,12 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     textAlign: 'center',
   },
+  modalMessage: {
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 8,
+  },
   modalInput: {
     borderWidth: 1,
     borderRadius: 10,
@@ -377,6 +448,34 @@ const styles = StyleSheet.create({
   modalButtonText: {
     color: '#fff',
     fontSize: 16,
+    fontWeight: '600',
+  },
+  modalButtonTextWhite: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Theme modal styles
+  themeOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+  },
+  themeIcon: {
+    fontSize: 20,
+    marginRight: 12,
+  },
+  themeLabel: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  themeCheck: {
+    fontSize: 18,
     fontWeight: '600',
   },
 })

@@ -3,7 +3,6 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router'
 import {
   View,
   FlatList,
-  RefreshControl,
   ActivityIndicator,
   Text,
   StyleSheet,
@@ -24,6 +23,7 @@ export default function SessionsScreen() {
 
   const {
     sessions,
+    sessionStatuses,
     recentProjects,
     isLoading,
     isCreating,
@@ -48,11 +48,6 @@ export default function SessionsScreen() {
       fetchSessions()
     }, [fetchSessions])
   )
-
-  const handleRefresh = useCallback(() => {
-    fetchSessions()
-    fetchRecentProjects()
-  }, [fetchSessions, fetchRecentProjects])
 
   const handleSessionPress = useCallback((sessionId: string) => {
     setCurrentSession(sessionId)
@@ -186,6 +181,7 @@ export default function SessionsScreen() {
                 <View key={session?.id}>
                   <SessionItem
                     session={session}
+                    status={session?.id ? sessionStatuses[session.id] : undefined}
                     onPress={() => session?.id && handleSessionPress(session.id)}
                     onDelete={() => session?.id && handleDeleteSession(session.id)}
                   />
@@ -198,13 +194,6 @@ export default function SessionsScreen() {
           </View>
         )}
         contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={isLoading}
-            onRefresh={handleRefresh}
-            tintColor={colors.primary}
-          />
-        }
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>

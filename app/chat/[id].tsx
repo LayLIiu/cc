@@ -1,13 +1,13 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   View,
   FlatList,
   StyleSheet,
-  KeyboardAvoidingView,
   Platform,
+  KeyboardAvoidingView,
   ActivityIndicator,
   Text,
-  RefreshControl,
+  TouchableOpacity,
 } from 'react-native'
 import { useLocalSearchParams, Stack, useNavigation } from 'expo-router'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -41,9 +41,9 @@ export default function ChatScreen() {
   const {
     messages,
     fetchMessages,
-    refreshMessages,
     addMessage,
     updateMessage,
+    updateSessionStatus,
     sessions,
     fetchSessions,
     updateSessionTitle,
@@ -79,6 +79,8 @@ export default function ChatScreen() {
 
   const flatListRef = useRef<FlatList>(null)
   const processedIds = useRef(new Set<string>())
+  const addedMessageContents = useRef(new Set<string>())
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   // Track stream state for pairing tool_use with tool_result
   const streamStateRef = useRef<StreamState>({
@@ -97,6 +99,14 @@ export default function ChatScreen() {
       fetchMessages(id)
     }
   }, [id, fetchMessages])
+
+  // Update session status when chatStatus changes
+  useEffect(() => {
+    if (id) {
+      console.log('[Chat] Updating session status:', id, chatStatus)
+      updateSessionStatus(id, chatStatus)
+    }
+  }, [id, chatStatus, updateSessionStatus])
 
   // Handle WebSocket messages
   useEffect(() => {
@@ -264,10 +274,21 @@ export default function ChatScreen() {
       }
 
       case 'user_message_echo':
-        // User message from another client - only fetch if we have no messages
+        // User message from another client - add it to messages
         console.log('[Chat] Received user_message_echo')
-        if (id && (!messages[id!] || messages[id!].length === 0)) {
-          fetchMessages(id)
+        if (id && lastMessage.content) {
+          // Check if message already exists (avoid duplicate from local send)
+          const contentKey = `user-${lastMessage.content}`
+          if (!addedMessageContents.current.has(contentKey)) {
+            addedMessageContents.current.add(contentKey)
+            const echoMsg: Message = {
+              id: lastMessage.id || `user-echo-${Date.now()}`,
+              type: 'user_text',
+              content: lastMessage.content,
+              timestamp: lastMessage.timestamp || String(Date.now()),
+            }
+            addMessage(id, echoMsg)
+          }
         }
         break
 
@@ -311,19 +332,24 @@ export default function ChatScreen() {
     }
 
     clearLastMessage()
-  }, [lastMessage, id, addMessage, updateMessage, clearLastMessage, send, messages, updateSessionTitle])
+  }, [lastMessage, id, addMessage, updateMessage, clearLastMessage, send, updateSessionTitle])
 
   const handleSend = useCallback((content: string) => {
     if (!content.trim()) return
+
+    const trimmedContent = content.trim()
 
     // Add user message locally
     const userMsg: Message = {
       id: `user-${Date.now()}`,
       type: 'user_text',
-      content: content.trim(),
+      content: trimmedContent,
       timestamp: String(Date.now()),
     }
     addMessage(id!, userMsg)
+
+    // Mark this content as added to avoid duplicate from echo
+    addedMessageContents.current.add(`user-${trimmedContent}`)
 
     // Reset streaming state
     const streamState = streamStateRef.current
@@ -337,8 +363,24 @@ export default function ChatScreen() {
     setStatusVerb('Thinking')
 
     // Send to server
-    send({ type: 'user_message', content: content.trim() })
+    send({ type: 'user_message', content: trimmedContent })
   }, [id, addMessage, send])
+
+  const handleStop = useCallback(() => {
+    console.log('[Chat] Stopping AI response')
+    // Send stop message to server
+    send({ type: 'stop' })
+    // Reset streaming state
+    const streamState = streamStateRef.current
+    streamState.textBuffer = ''
+    streamState.thinkingBuffer = ''
+    streamState.inTextBlock = false
+    streamState.inThinkingBlock = false
+    setStreamingText('')
+    setStreamingThinking('')
+    setChatStatus('idle')
+    setStatusVerb('')
+  }, [send])
 
   const handlePermissionAllow = useCallback((requestId: string, always: boolean) => {
     console.log('[Chat] Permission allowed:', requestId, always ? '(always)' : '(once)')
@@ -366,32 +408,104 @@ export default function ChatScreen() {
     setStatusVerb('Thinking')
   }, [send])
 
-  const handleRefresh = useCallback(() => {
-    if (id) {
-      refreshMessages(id)
-    }
-  }, [id, refreshMessages])
+  // Handle scroll to show/hide scroll-to-bottom button
+  const handleScroll = useCallback(({ nativeEvent }) => {
+    // In inverted list, offset > 50 means user scrolled away from latest
+    const isNearLatest = nativeEvent.contentOffset.y < 50
+    setShowScrollToBottom(!isNearLatest)
+  }, [])
 
-  // Build the complete message list including streaming content
-  // For inverted FlatList, we reverse the order so newest messages appear at the "bottom" (which is visually the top in inverted mode)
-  const allMessages = [
-    // Streaming content goes first (will appear at bottom in inverted list)
-    ...(streamingText ? [{
-      id: 'streaming-text',
-      type: 'assistant_text' as const,
-      content: streamingText,
-      timestamp: String(Date.now()),
-    }] : []),
-    ...(streamingThinking ? [{
-      id: 'streaming-thinking',
-      type: 'thinking' as const,
-      content: streamingThinking,
-      timestamp: String(Date.now()),
-      isStreaming: true,
-    }] : []),
-    // Historical messages in reverse order
-    ...(messages[id!] || []).slice().reverse(),
-  ]
+  // 使用 useMemo 缓存消息列表，减少重新计算
+  const allMessages = useMemo(() => {
+    const historical = messages[id!] || []
+    return [
+      // Streaming content goes first (will appear at bottom in inverted list)
+      ...(streamingText ? [{
+        id: 'streaming-text',
+        type: 'assistant_text' as const,
+        content: streamingText,
+        timestamp: String(Date.now()),
+      }] : []),
+      ...(streamingThinking ? [{
+        id: 'streaming-thinking',
+        type: 'thinking' as const,
+        content: streamingThinking,
+        timestamp: String(Date.now()),
+        isStreaming: true,
+      }] : []),
+      // Historical messages in reverse order
+      ...historical.slice().reverse(),
+    ]
+  }, [messages[id], streamingText, streamingThinking])
+
+  // 使用 useCallback 缓存 renderItem
+  const renderMessage = useCallback(({ item, index }: { item: any; index: number }) => (
+    <MessageBubble
+      message={item}
+      isLast={index === allMessages.length - 1}
+    />
+  ), [allMessages.length])
+
+  // Scroll to latest message (bottom of inverted list = index 0)
+  const scrollToLatest = useCallback(() => {
+    if (flatListRef.current) {
+      flatListRef.current.scrollToIndex({ index: 0, animated: true })
+    }
+  }, [])
+
+  const content = (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {isLoading && allMessages.length === 0 ? (
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : (
+        <>
+          <FlatList
+            ref={flatListRef}
+            data={allMessages}
+            inverted
+            keyExtractor={(item) => item.id}
+            renderItem={renderMessage}
+            contentContainerStyle={[styles.listContent, { backgroundColor: colors.background }]}
+            onScroll={handleScroll}
+            scrollEventThrottle={100}
+            removeClippedSubviews={true}
+            maxToRenderPerBatch={10}
+            windowSize={5}
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+          />
+
+          {/* Scroll to latest button */}
+          {showScrollToBottom && (
+            <TouchableOpacity
+              style={[styles.scrollToBottom, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={scrollToLatest}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.scrollToBottomText, { color: colors.primary }]}>↓ 最新</Text>
+            </TouchableOpacity>
+          )}
+
+          <ChatInput
+            onSend={handleSend}
+            onStop={handleStop}
+            placeholder="发送消息..."
+            chatStatus={chatStatus}
+          />
+        </>
+      )}
+
+      {/* Permission Dialog */}
+      <PermissionDialog
+        visible={!!permissionRequest}
+        request={permissionRequest}
+        onAllow={handlePermissionAllow}
+        onDeny={handlePermissionDeny}
+      />
+    </View>
+  )
 
   return (
     <>
@@ -401,55 +515,17 @@ export default function ChatScreen() {
           headerBackTitle: '返回',
         }}
       />
-      <KeyboardAvoidingView
-        style={[styles.container, { backgroundColor: colors.background }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={100}
-      >
-        {isLoading && allMessages.length === 0 ? (
-          <View style={styles.center}>
-            <ActivityIndicator size="large" color={colors.primary} />
-          </View>
-        ) : (
-          <>
-            <FlatList
-              ref={flatListRef}
-              data={allMessages}
-              inverted
-              keyExtractor={(item) => item.id}
-              renderItem={({ item, index }) => (
-                <MessageBubble
-                  message={item}
-                  isLast={index === allMessages.length - 1}
-                />
-              )}
-              contentContainerStyle={[styles.listContent, { backgroundColor: colors.background }]}
-              refreshControl={
-                <RefreshControl
-                  refreshing={isLoading}
-                  onRefresh={handleRefresh}
-                  tintColor={colors.primary}
-                  colors={[colors.primary]}
-                />
-              }
-            />
-
-            <ChatInput
-              onSend={handleSend}
-              placeholder="发送消息..."
-              chatStatus={chatStatus}
-            />
-          </>
-        )}
-
-        {/* Permission Dialog */}
-        <PermissionDialog
-          visible={!!permissionRequest}
-          request={permissionRequest}
-          onAllow={handlePermissionAllow}
-          onDeny={handlePermissionDeny}
-        />
-      </KeyboardAvoidingView>
+      {Platform.OS === 'ios' ? (
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior="padding"
+          keyboardVerticalOffset={90}
+        >
+          {content}
+        </KeyboardAvoidingView>
+      ) : (
+        content
+      )}
     </>
   )
 }
@@ -458,4 +534,22 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   listContent: { padding: 16, paddingBottom: 8 },
+  scrollToBottom: {
+    position: 'absolute',
+    bottom: 80,
+    right: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  scrollToBottomText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
 })

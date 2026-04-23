@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, memo } from 'react'
 import {
   View,
   Text,
@@ -46,14 +46,14 @@ const TOOL_LABELS: Record<string, string> = {
   WebFetch: 'Fetch URL',
 }
 
-export function ToolCallBlock({
+const ToolCallBlockComponent = ({
   toolName,
   input,
   status = 'completed',
   result,
   timestamp,
   duration,
-}: ToolCallProps) {
+}: ToolCallProps) => {
   const { colors } = useTheme()
   const [expanded, setExpanded] = useState(false)
 
@@ -171,6 +171,8 @@ export function ToolCallBlock({
     </View>
   )
 }
+
+export const ToolCallBlock = memo(ToolCallBlockComponent)
 
 type ToolCallGroupProps = {
   title?: string

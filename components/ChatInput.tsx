@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState, memo } from 'react'
 import {
   View,
   Text,
@@ -11,18 +11,25 @@ import { ClaudeLogoWidget } from './shared/ClaudeLogoWidget'
 
 type ChatInputProps = {
   onSend: (message: string) => void
+  onStop?: () => void
   placeholder?: string
   chatStatus?: 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending'
 }
 
-export function ChatInput({ onSend, placeholder = '发送消息...', chatStatus = 'idle' }: ChatInputProps) {
+const ChatInputComponent = ({ onSend, onStop, placeholder = '发送消息...', chatStatus = 'idle' }: ChatInputProps) => {
   const { colors } = useTheme()
   const [text, setText] = useState('')
+
+  const isWorking = chatStatus !== 'idle'
 
   const handleSend = () => {
     if (!text.trim()) return
     onSend(text.trim())
     setText('')
+  }
+
+  const handleStop = () => {
+    onStop?.()
   }
 
   return (
@@ -43,16 +50,29 @@ export function ChatInput({ onSend, placeholder = '发送消息...', chatStatus 
         placeholderTextColor={colors.textTertiary}
         multiline
         maxLength={4000}
+        editable={!isWorking}
       />
-      <TouchableOpacity
-        style={[styles.sendButton, { backgroundColor: colors.primary }]}
-        onPress={handleSend}
-      >
-        <Text style={styles.sendText}>发送</Text>
-      </TouchableOpacity>
+      {isWorking ? (
+        <TouchableOpacity
+          style={styles.stopButton}
+          onPress={handleStop}
+        >
+          <Text style={styles.stopText}>暂停</Text>
+        </TouchableOpacity>
+      ) : (
+        <TouchableOpacity
+          style={[styles.sendButton, { backgroundColor: colors.primary }]}
+          onPress={handleSend}
+          disabled={!text.trim()}
+        >
+          <Text style={[styles.sendText, { opacity: text.trim() ? 1 : 0.5 }]}>发送</Text>
+        </TouchableOpacity>
+      )}
     </View>
   )
 }
+
+export const ChatInput = memo(ChatInputComponent)
 
 const styles = StyleSheet.create({
   container: {
@@ -77,15 +97,28 @@ const styles = StyleSheet.create({
     maxHeight: 100,
   },
   sendButton: {
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
   },
   sendText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  stopButton: {
+    backgroundColor: '#f97316',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stopText: {
+    color: '#fff',
+    fontSize: 15,
     fontWeight: '600',
   },
 })

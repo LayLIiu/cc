@@ -1,3 +1,4 @@
+import React, { memo } from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import type { Message } from '@/types/session'
@@ -10,7 +11,8 @@ type MessageBubbleProps = {
   isLast?: boolean
 }
 
-export function MessageBubble({ message, isLast }: MessageBubbleProps) {
+// 使用 memo 避免不必要的重新渲染
+const MessageBubbleComponent = ({ message, isLast }: MessageBubbleProps) => {
   const { colors } = useTheme()
 
   // User message - right side, primary color
@@ -72,16 +74,29 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
   )
 }
 
+// 自定义比较函数，只在 message.id 或 isLast 变化时重新渲染
+export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.isLast === nextProps.isLast &&
+    prevProps.message.type === nextProps.message.type &&
+    // 对于流式消息，检查内容是否变化
+    (nextProps.message.type !== 'thinking' || prevProps.message.isStreaming === nextProps.message.isStreaming)
+  )
+})
+
 const styles = StyleSheet.create({
   userWrapper: {
     alignItems: 'flex-end',
     marginBottom: 12,
+    paddingHorizontal: 8,
   },
   lastMessage: {
     marginBottom: 0,
   },
   userBubble: {
-    maxWidth: '85%',
+    maxWidth: '92%',
+    minWidth: 50,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 18,
@@ -96,23 +111,26 @@ const styles = StyleSheet.create({
   assistantWrapper: {
     alignItems: 'flex-start',
     marginBottom: 12,
+    paddingHorizontal: 8,
+    width: '100%',
   },
   assistantBubble: {
-    maxWidth: '85%',
+    maxWidth: '92%',
+    minWidth: 50,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 20,
     borderBottomLeftRadius: 8,
     borderWidth: 1,
-    overflow: 'hidden',
   },
 
   toolWrapper: {
-    marginHorizontal: 16,
+    marginHorizontal: 8,
     marginBottom: 4,
   },
 
   thinkingWrapper: {
     marginBottom: 4,
+    marginHorizontal: 8,
   },
 })

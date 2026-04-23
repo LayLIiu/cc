@@ -1,3 +1,5 @@
+export type SessionStatus = 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending'
+
 export type Session = {
   id: string
   title: string

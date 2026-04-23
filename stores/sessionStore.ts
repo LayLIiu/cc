@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { apiClient, type RecentProject } from '@/api/client'
-import type { Session, Message } from '@/types/session'
+import type { Session, Message, SessionStatus } from '@/types/session'
 
 const STORAGE_KEY_PREFIX = 'cc_chat_messages_'
 
@@ -52,6 +52,7 @@ type SessionState = {
   sessions: Session[]
   currentSessionId: string | null
   messages: Record<string, Message[]>
+  sessionStatuses: Record<string, SessionStatus>
   recentProjects: RecentProject[]
   isLoading: boolean
   isCreating: boolean
@@ -63,6 +64,7 @@ type SessionState = {
   refreshMessages: (sessionId: string) => Promise<void>
   addMessage: (sessionId: string, message: Message) => void
   updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void
+  updateSessionStatus: (sessionId: string, status: SessionStatus) => void
   createSession: (workDir?: string) => Promise<string | null>
   deleteSession: (sessionId: string) => Promise<void>
   importSessions: (sessionIds: string[], sessionInfos?: Session[]) => Promise<number>
@@ -75,6 +77,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
   messages: {},
+  sessionStatuses: {},
   recentProjects: [],
   isLoading: false,
   isCreating: false,
@@ -171,6 +174,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       }
     })
+  },
+
+  updateSessionStatus: (sessionId, status) => {
+    set((state) => ({
+      sessionStatuses: {
+        ...state.sessionStatuses,
+        [sessionId]: status,
+      },
+    }))
   },
 
   createSession: async (workDir) => {

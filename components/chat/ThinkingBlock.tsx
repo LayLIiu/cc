@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { memo } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import { ChevronDown, ChevronRight } from '../markdown/Icons'
@@ -10,10 +10,10 @@ type ThinkingBlockProps = {
   timestamp?: string
 }
 
-export function ThinkingBlock({
+const ThinkingBlockComponent = ({
   content = '',
   isStreaming = false,
-}: ThinkingBlockProps) {
+}: ThinkingBlockProps) => {
   const { colors } = useTheme()
   const [expanded, setExpanded] = React.useState(false)
 
@@ -69,6 +69,8 @@ export function ThinkingBlock({
     </View>
   )
 }
+
+export const ThinkingBlock = memo(ThinkingBlockComponent)
 
 type ThinkingAnimationProps = {
   size?: number

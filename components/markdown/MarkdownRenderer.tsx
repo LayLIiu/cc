@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, memo } from 'react'
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Linking, Platform } from 'react-native'
 import * as Clipboard from 'expo-clipboard'
 import { useTheme } from '@/utils/theme'
@@ -246,7 +246,7 @@ function CodeBlock({
   )
 }
 
-export function MarkdownRenderer({ content, style }: MarkdownRendererProps) {
+const MarkdownRendererComponent = ({ content, style }: MarkdownRendererProps) => {
   const { colors } = useTheme()
   const nodes = useMemo(() => parseMarkdown(content), [content])
 
@@ -282,8 +282,7 @@ export function MarkdownRenderer({ content, style }: MarkdownRendererProps) {
               backgroundColor: colors.surface,
               color: colors.accent,
               fontFamily: Platform.select({ ios: 'Courier', android: 'monospace' }),
-              paddingVertical: 2,
-              paddingHorizontal: 6,
+              paddingHorizontal: 4,
               borderRadius: 4,
               fontSize: 13,
             }}
@@ -325,13 +324,11 @@ export function MarkdownRenderer({ content, style }: MarkdownRendererProps) {
 
       case 'paragraph':
         return (
-          <View key={index} style={styles.paragraph}>
-            <Text style={{ color: colors.text }}>
-              {node.content.map((el, i) => (
-                <React.Fragment key={i}>{renderInlineElement(el)}</React.Fragment>
-              ))}
-            </Text>
-          </View>
+          <Text key={index} style={[styles.paragraph, { color: colors.text }]}>
+            {node.content.map((el, i) => (
+              <React.Fragment key={i}>{renderInlineElement(el)}</React.Fragment>
+            ))}
+          </Text>
         )
 
       case 'list':
@@ -384,14 +381,17 @@ export function MarkdownRenderer({ content, style }: MarkdownRendererProps) {
   )
 }
 
+export const MarkdownRenderer = memo(MarkdownRendererComponent)
+
 const styles = StyleSheet.create({
   container: {
-    // No flex to avoid taking extra space
+    flexShrink: 1,
   },
   codeBlock: {
     marginVertical: 4,
     borderRadius: 8,
     overflow: 'hidden',
+    maxWidth: '100%',
   },
   codeHeader: {
     flexDirection: 'row',
@@ -413,7 +413,6 @@ const styles = StyleSheet.create({
   },
   codeScroll: {
     paddingHorizontal: 8,
-    // 防止 ScrollView 在 Android 上被撑开到不必要的高度
     flexGrow: 0,
   },
   codeText: {
@@ -443,15 +442,18 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   paragraph: {
-    // No margin to avoid extra space
+    flexShrink: 1,
+    lineHeight: 22,
   },
   list: {
     marginLeft: 16,
     marginVertical: 4,
+    flexShrink: 1,
   },
   listItem: {
     flexDirection: 'row',
     marginBottom: 2,
+    flexShrink: 1,
   },
   bullet: {
     marginRight: 8,
@@ -463,5 +465,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     marginVertical: 4,
     borderRadius: 4,
+    flexShrink: 1,
   },
 })
