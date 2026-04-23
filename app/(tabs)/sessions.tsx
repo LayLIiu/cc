@@ -165,7 +165,7 @@ export default function SessionsScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* New Session Button */}
       <View style={styles.header}>
-        <Text style={[styles.pageTitle, { color: colors.text }]}>会话</Text>
+        <Text style={[styles.pageTitle, { color: colors.text }]}>Claude Code</Text>
         <TouchableOpacity
           style={[styles.newButton, { backgroundColor: colors.primary }]}
           onPress={handleNewSession}
