@@ -17,7 +17,7 @@ import { useTheme } from '@/utils/theme'
 export default function LoginScreen() {
   const router = useRouter()
   const { colors } = useTheme()
-  const { login, setLanUrl, setTunnelUrl, setServerMode, lanUrl, tunnelUrl } = useAuthStore()
+  const { login, setLanUrl, setTunnelUrl, lanUrl, tunnelUrl } = useAuthStore()
 
   const [mode, setMode] = useState<'pairing' | 'manual'>('pairing')
   const [pairingCode, setPairingCode] = useState('')
@@ -99,13 +99,11 @@ export default function LoginScreen() {
       }
 
       // 配对成功，保存服务器地址
-      // 判断是局域网还是公网隧道
+      // setLanUrl/setTunnelUrl 会自动设置 serverUrl 和 serverMode
       if (serverAddr.startsWith('https://')) {
         setTunnelUrl(serverAddr)
-        setServerMode('tunnel')
       } else {
         setLanUrl(serverAddr)
-        setServerMode('lan')
       }
 
       login(
@@ -141,13 +139,14 @@ export default function LoginScreen() {
       }
 
       // Save server URL
+      // setLanUrl/setTunnelUrl 会自动设置 serverUrl 和 serverMode
       const url = serverAddress.trim()
       if (url.startsWith('https://')) {
         setTunnelUrl(url)
-        setServerMode('tunnel')
       } else {
-        setLanUrl(url)
-        setServerMode('lan')
+        // 确保有 http:// 前缀
+        const lanAddr = url.startsWith('http://') ? url : `http://${url}`
+        setLanUrl(lanAddr.replace(/\/+$/, ''))
       }
 
       login(

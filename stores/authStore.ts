@@ -54,13 +54,21 @@ export const useAuthStore = create<AuthState>()(
       logout: () => set({ user: null, token: null, isLoggedIn: false }),
 
       setLanUrl: (url) => {
-        const mode = get().serverMode
-        set({ lanUrl: url, serverUrl: mode === 'lan' ? url : get().tunnelUrl })
+        // 设置局域网地址，并自动切换到局域网模式
+        set({
+          lanUrl: url,
+          serverMode: 'lan',
+          serverUrl: url
+        })
       },
 
       setTunnelUrl: (url) => {
-        const mode = get().serverMode
-        set({ tunnelUrl: url, serverUrl: mode === 'tunnel' ? url : get().lanUrl })
+        // 设置公网地址，并自动切换到公网模式
+        set({
+          tunnelUrl: url,
+          serverMode: 'tunnel',
+          serverUrl: url
+        })
       },
 
       setServerMode: (mode) => {
