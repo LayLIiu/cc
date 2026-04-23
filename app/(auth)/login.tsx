@@ -17,11 +17,11 @@ import { useTheme } from '@/utils/theme'
 export default function LoginScreen() {
   const router = useRouter()
   const { colors } = useTheme()
-  const { login, setServerUrl, serverUrl } = useAuthStore()
+  const { login, setLanUrl, setTunnelUrl, setServerMode, lanUrl, tunnelUrl } = useAuthStore()
 
   const [mode, setMode] = useState<'pairing' | 'manual'>('pairing')
   const [pairingCode, setPairingCode] = useState('')
-  const [serverAddress, setServerAddress] = useState(serverUrl)
+  const [serverAddress, setServerAddress] = useState(lanUrl || tunnelUrl)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -99,7 +99,14 @@ export default function LoginScreen() {
       }
 
       // 配对成功，保存服务器地址
-      setServerUrl(serverAddr)
+      // 判断是局域网还是公网隧道
+      if (serverAddr.startsWith('https://')) {
+        setTunnelUrl(serverAddr)
+        setServerMode('tunnel')
+      } else {
+        setLanUrl(serverAddr)
+        setServerMode('lan')
+      }
 
       login(
         { id: 'mobile-user', email: 'mobile@example.com', name: 'Mobile User' },
@@ -134,7 +141,14 @@ export default function LoginScreen() {
       }
 
       // Save server URL
-      setServerUrl(serverAddress.trim())
+      const url = serverAddress.trim()
+      if (url.startsWith('https://')) {
+        setTunnelUrl(url)
+        setServerMode('tunnel')
+      } else {
+        setLanUrl(url)
+        setServerMode('lan')
+      }
 
       login(
         { id: 'user-1', email: 'user@example.com', name: 'User' },

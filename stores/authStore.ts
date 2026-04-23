@@ -10,30 +10,41 @@ type User = {
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
+export type ServerMode = 'lan' | 'tunnel'
+
 type AuthState = {
   user: User | null
   token: string | null
+  // 当前使用的服务器地址（动态计算）
   serverUrl: string
-  tunnelUrl: string | null
+  // 局域网地址
+  lanUrl: string
+  // 公网地址
+  tunnelUrl: string
+  // 当前模式
+  serverMode: ServerMode
   isLoggedIn: boolean
   isHydrated: boolean
   themeMode: ThemeMode
 
   login: (user: User, token: string) => void
   logout: () => void
-  setServerUrl: (url: string) => void
+  setLanUrl: (url: string) => void
   setTunnelUrl: (url: string) => void
+  setServerMode: (mode: ServerMode) => void
   setHydrated: () => void
   setThemeMode: (mode: ThemeMode) => void
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       token: null,
-      serverUrl: 'http://192.168.3.33:3456',
-      tunnelUrl: null,
+      serverUrl: '',
+      lanUrl: '',
+      tunnelUrl: '',
+      serverMode: 'lan',
       isLoggedIn: false,
       isHydrated: false,
       themeMode: 'system',
@@ -42,9 +53,23 @@ export const useAuthStore = create<AuthState>()(
 
       logout: () => set({ user: null, token: null, isLoggedIn: false }),
 
-      setServerUrl: (url) => set({ serverUrl: url }),
+      setLanUrl: (url) => {
+        const mode = get().serverMode
+        set({ lanUrl: url, serverUrl: mode === 'lan' ? url : get().tunnelUrl })
+      },
 
-      setTunnelUrl: (url) => set({ tunnelUrl: url }),
+      setTunnelUrl: (url) => {
+        const mode = get().serverMode
+        set({ tunnelUrl: url, serverUrl: mode === 'tunnel' ? url : get().lanUrl })
+      },
+
+      setServerMode: (mode) => {
+        const { lanUrl, tunnelUrl } = get()
+        set({
+          serverMode: mode,
+          serverUrl: mode === 'lan' ? lanUrl : tunnelUrl
+        })
+      },
 
       setHydrated: () => set({ isHydrated: true }),
 
@@ -56,13 +81,18 @@ export const useAuthStore = create<AuthState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           state.isHydrated = true
+          // 恢复后根据模式设置正确的 serverUrl
+          if (state.lanUrl || state.tunnelUrl) {
+            state.serverUrl = state.serverMode === 'lan' ? state.lanUrl : state.tunnelUrl
+          }
         }
       },
       partialize: (state) => ({
         user: state.user,
         token: state.token,
-        serverUrl: state.serverUrl,
+        lanUrl: state.lanUrl,
         tunnelUrl: state.tunnelUrl,
+        serverMode: state.serverMode,
         isLoggedIn: state.isLoggedIn,
         themeMode: state.themeMode,
       }),

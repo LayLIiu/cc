@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, Modal, ActivityIndicator } from 'react-native'
 import { useRouter } from 'expo-router'
-import { useAuthStore, type ThemeMode } from '@/stores/authStore'
+import { useAuthStore, type ThemeMode, type ServerMode } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useTheme } from '@/utils/theme'
 
@@ -18,10 +18,23 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; icon: string }[] = [
 export default function SettingsScreen() {
   const router = useRouter()
   const { colors } = useTheme()
-  const { user, serverUrl, logout, setServerUrl, themeMode, setThemeMode } = useAuthStore()
+  const {
+    user,
+    serverUrl,
+    lanUrl,
+    tunnelUrl,
+    serverMode,
+    logout,
+    setLanUrl,
+    setTunnelUrl,
+    setServerMode,
+    themeMode,
+    setThemeMode
+  } = useAuthStore()
   const { sessions } = useSessionStore()
 
-  const [showUrlModal, setShowUrlModal] = useState(false)
+  const [showLanModal, setShowLanModal] = useState(false)
+  const [showTunnelModal, setShowTunnelModal] = useState(false)
   const [showThemeModal, setShowThemeModal] = useState(false)
   const [showLogoutModal, setShowLogoutModal] = useState(false)
   const [tempUrl, setTempUrl] = useState('')
@@ -40,7 +53,7 @@ export default function SettingsScreen() {
     try {
       const start = Date.now()
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 15000) // 15秒超时
+      const timeoutId = setTimeout(() => controller.abort(), 15000)
 
       const response = await fetch(`${serverUrl}/api/sessions`, {
         method: 'GET',
@@ -55,14 +68,13 @@ export default function SettingsScreen() {
       const duration = end - start
 
       if (response.ok || response.status === 401) {
-        // 401 也算连接成功，只是未授权
         setLatency(duration)
       } else {
-        setLatency(-1) // 请求失败
+        setLatency(-1)
       }
     } catch (err: any) {
       console.log('Latency test error:', err)
-      setLatency(-1) // 连接失败
+      setLatency(-1)
     } finally {
       setTestingLatency(false)
     }
@@ -97,25 +109,58 @@ export default function SettingsScreen() {
     router.replace('/(auth)/login')
   }
 
-  const handleEditUrl = () => {
-    setTempUrl(serverUrl)
-    setShowUrlModal(true)
+  // 编辑局域网地址
+  const handleEditLan = () => {
+    setTempUrl(lanUrl)
+    setShowLanModal(true)
   }
 
-  const handleSaveUrl = () => {
+  // 编辑公网地址
+  const handleEditTunnel = () => {
+    setTempUrl(tunnelUrl)
+    setShowTunnelModal(true)
+  }
+
+  // 保存局域网地址
+  const handleSaveLan = () => {
     if (tempUrl.trim()) {
-      // 确保 URL 格式正确
+      let url = tempUrl.trim()
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'http://' + url
+      }
+      url = url.replace(/\/+$/, '')
+      setLanUrl(url)
+      setShowLanModal(false)
+      setLatency(null)
+    }
+  }
+
+  // 保存公网地址
+  const handleSaveTunnel = () => {
+    if (tempUrl.trim()) {
       let url = tempUrl.trim()
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = 'https://' + url
       }
-      // 移除末尾斜杠
       url = url.replace(/\/+$/, '')
-      setServerUrl(url)
-      setShowUrlModal(false)
-      // 清除之前的延迟测试结果
+      setTunnelUrl(url)
+      setShowTunnelModal(false)
       setLatency(null)
     }
+  }
+
+  // 切换服务器模式
+  const handleToggleMode = () => {
+    const newMode: ServerMode = serverMode === 'lan' ? 'tunnel' : 'lan'
+    // 只有对应地址存在时才能切换
+    if (newMode === 'tunnel' && !tunnelUrl) {
+      return
+    }
+    if (newMode === 'lan' && !lanUrl) {
+      return
+    }
+    setServerMode(newMode)
+    setLatency(null)
   }
 
   return (
@@ -146,25 +191,97 @@ export default function SettingsScreen() {
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
           连接
         </Text>
+
+        {/* 服务器切换 */}
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
-          <TouchableOpacity style={styles.urlRow} onPress={handleEditUrl}>
-            <View style={styles.urlInfo}>
-              <Text style={[styles.label, { color: colors.text }]}>服务器地址</Text>
-              <Text
-                style={[styles.urlValue, { color: colors.textSecondary }]}
-                numberOfLines={2}
+          {/* 当前模式显示 */}
+          <View style={styles.modeRow}>
+            <Text style={[styles.label, { color: colors.text }]}>当前网络</Text>
+            <View style={styles.modeSwitch}>
+              <TouchableOpacity
+                style={[
+                  styles.modeButton,
+                  serverMode === 'lan' && { backgroundColor: colors.primary }
+                ]}
+                onPress={() => lanUrl && setServerMode('lan')}
+                disabled={!lanUrl}
               >
-                {serverUrl}
+                <Text style={[
+                  styles.modeButtonText,
+                  { color: serverMode === 'lan' ? '#fff' : colors.textSecondary }
+                ]}>
+                  局域网
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modeButton,
+                  serverMode === 'tunnel' && { backgroundColor: colors.primary }
+                ]}
+                onPress={() => tunnelUrl && setServerMode('tunnel')}
+                disabled={!tunnelUrl}
+              >
+                <Text style={[
+                  styles.modeButtonText,
+                  { color: serverMode === 'tunnel' ? '#fff' : colors.textSecondary }
+                ]}>
+                  公网
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* 局域网地址 */}
+          <TouchableOpacity style={styles.urlRow} onPress={handleEditLan}>
+            <View style={styles.urlInfo}>
+              <Text style={[styles.label, { color: colors.text }]}>局域网地址</Text>
+              <Text
+                style={[styles.urlValue, { color: lanUrl ? colors.textSecondary : colors.textTertiary }]}
+                numberOfLines={1}
+              >
+                {lanUrl || '未设置'}
               </Text>
             </View>
             <Text style={[styles.editHint, { color: colors.primary }]}>编辑</Text>
           </TouchableOpacity>
 
-          {/* 分割线 */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* 公网地址 */}
+          <TouchableOpacity style={styles.urlRow} onPress={handleEditTunnel}>
+            <View style={styles.urlInfo}>
+              <Text style={[styles.label, { color: colors.text }]}>公网地址</Text>
+              <Text
+                style={[styles.urlValue, { color: tunnelUrl ? colors.textSecondary : colors.textTertiary }]}
+                numberOfLines={1}
+              >
+                {tunnelUrl || '未设置'}
+              </Text>
+            </View>
+            <Text style={[styles.editHint, { color: colors.primary }]}>编辑</Text>
+          </TouchableOpacity>
+
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* 当前使用的地址 */}
+          <View style={styles.urlRow}>
+            <View style={styles.urlInfo}>
+              <Text style={[styles.label, { color: colors.text }]}>当前地址</Text>
+              <Text
+                style={[styles.urlValue, { color: colors.textSecondary }]}
+                numberOfLines={1}
+              >
+                {serverUrl || '未设置'}
+              </Text>
+            </View>
+          </View>
+
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
           {/* 连接速度 */}
-          <TouchableOpacity style={styles.latencyRow} onPress={testLatency} disabled={testingLatency}>
+          <TouchableOpacity style={styles.latencyRow} onPress={testLatency} disabled={testingLatency || !serverUrl}>
             <View style={styles.latencyInfo}>
               <Text style={[styles.label, { color: colors.text }]}>连接速度</Text>
               {testingLatency ? (
@@ -184,14 +301,14 @@ export default function SettingsScreen() {
                 </Text>
               )}
             </View>
-            {!testingLatency && (
+            {!testingLatency && serverUrl && (
               <Text style={[styles.editHint, { color: colors.primary }]}>测试</Text>
             )}
           </TouchableOpacity>
         </View>
 
         <Text style={[styles.hint, { color: colors.textTertiary }]}>
-          提示：可以使用 Cloudflare Tunnel 实现远程连接
+          局域网适合在家使用，公网适合外出使用
         </Text>
       </View>
 
@@ -268,41 +385,82 @@ export default function SettingsScreen() {
         Claude Code Mobile v{APP_VERSION} ({BUILD_TIME})
       </Text>
 
-      {/* Edit URL Modal */}
+      {/* 局域网地址编辑 Modal */}
       <Modal
-        visible={showUrlModal}
+        visible={showLanModal}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowUrlModal(false)}
+        onRequestClose={() => setShowLanModal(false)}
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>编辑服务器地址</Text>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>局域网地址</Text>
             <TextInput
               style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
               value={tempUrl}
               onChangeText={setTempUrl}
-              placeholder="https://your-tunnel.trycloudflare.com"
+              placeholder="http://192.168.x.x:3456"
               placeholderTextColor={colors.textTertiary}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
             />
             <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
-              输入桌面端显示的服务器地址{'\n'}
-              例如：http://192.168.1.100:3456{'\n'}
-              或公网 Tunnel 地址
+              输入桌面端的局域网地址{'\n'}
+              例如：http://192.168.3.33:3456
             </Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, { backgroundColor: colors.border }]}
-                onPress={() => setShowUrlModal(false)}
+                onPress={() => setShowLanModal(false)}
               >
                 <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalButton, { backgroundColor: colors.primary }]}
-                onPress={handleSaveUrl}
+                onPress={handleSaveLan}
+              >
+                <Text style={styles.modalButtonTextWhite}>保存</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 公网地址编辑 Modal */}
+      <Modal
+        visible={showTunnelModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowTunnelModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>公网地址</Text>
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+              value={tempUrl}
+              onChangeText={setTempUrl}
+              placeholder="https://xxx.trycloudflare.com"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+              输入 Cloudflare Tunnel 公网地址{'\n'}
+              或其他公网代理地址
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.border }]}
+                onPress={() => setShowTunnelModal(false)}
+              >
+                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.primary }]}
+                onPress={handleSaveTunnel}
               >
                 <Text style={styles.modalButtonTextWhite}>保存</Text>
               </TouchableOpacity>
@@ -423,6 +581,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  // 模式切换
+  modeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modeSwitch: {
+    flexDirection: 'row',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  modeButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  modeButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   urlRow: {
     flexDirection: 'row',
@@ -573,7 +751,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalButtonText: {
-    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },
