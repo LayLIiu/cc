@@ -1,18 +1,24 @@
 import { useState } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, TextInput, Modal } from 'react-native'
 import { useRouter } from 'expo-router'
-import { useAuthStore } from '@/stores/authStore'
+import { useAuthStore, type ThemeMode } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useTheme } from '@/utils/theme'
 
 // 版本信息 - 每次修改后更新
-const APP_VERSION = '1.0.8'
-const BUILD_TIME = '2026-04-23 01:05'
+const APP_VERSION = '1.0.9'
+const BUILD_TIME = '2026-04-23 08:41'
+
+const THEME_OPTIONS: { mode: ThemeMode; label: string; icon: string }[] = [
+  { mode: 'light', label: '浅色', icon: '☀️' },
+  { mode: 'dark', label: '深色', icon: '🌙' },
+  { mode: 'system', label: '跟随系统', icon: '💻' },
+]
 
 export default function SettingsScreen() {
   const router = useRouter()
-  const { colors, isDark } = useTheme()
-  const { user, serverUrl, logout, setServerUrl } = useAuthStore()
+  const { colors } = useTheme()
+  const { user, serverUrl, logout, setServerUrl, themeMode, setThemeMode } = useAuthStore()
   const { sessions } = useSessionStore()
 
   const [showUrlModal, setShowUrlModal] = useState(false)
@@ -97,10 +103,38 @@ export default function SettingsScreen() {
 
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+          外观
+        </Text>
+        <View style={[styles.card, { backgroundColor: colors.surface }]}>
+          <TouchableOpacity
+            style={styles.urlRow}
+            onPress={() =>
+              Alert.alert('选择主题', undefined, [
+                ...THEME_OPTIONS.map((opt) => ({
+                  text: `${opt.icon} ${opt.label}`,
+                  onPress: () => setThemeMode(opt.mode),
+                })),
+                { text: '取消', style: 'cancel' },
+              ])
+            }
+          >
+            <View style={styles.urlInfo}>
+              <Text style={[styles.label, { color: colors.text }]}>主题</Text>
+              <Text style={[styles.urlValue, { color: colors.textSecondary }]}>
+                {THEME_OPTIONS.find((o) => o.mode === themeMode)?.label || '跟随系统'}
+              </Text>
+            </View>
+            <Text style={[styles.editHint, { color: colors.primary }]}>选择</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
           数据管理
         </Text>
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
-          <TouchableOpacity style={styles.menuItem} onPress={() => router.push('/(tabs)/import' as any)}>
+          <TouchableOpacity style={styles.menuItem} onPress={() => router.push('/import')}>
             <View style={styles.menuIcon}>
               <Text style={styles.menuIconText}>📥</Text>
             </View>
@@ -131,7 +165,7 @@ export default function SettingsScreen() {
           <View style={[styles.row, { borderTopColor: colors.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }]}>
             <Text style={[styles.label, { color: colors.text }]}>主题</Text>
             <Text style={[styles.value, { color: colors.textSecondary }]}>
-              {isDark ? '深色' : '浅色'} (跟随系统)
+              {THEME_OPTIONS.find(o => o.mode === themeMode)?.label || '跟随系统'}
             </Text>
           </View>
         </View>

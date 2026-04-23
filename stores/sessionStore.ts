@@ -5,33 +5,46 @@ import type { Session, Message } from '@/types/session'
 
 const STORAGE_KEY_PREFIX = 'cc_chat_messages_'
 
-// AsyncStorage helpers
-const saveMessagesToStorage = async (sessionId: string, messages: Message[]) => {
+// AsyncStorage helpers for deleted sessions
+const saveDeletedSession = async (sessionId: string) => {
   try {
-    const key = `${STORAGE_KEY_PREFIX}${sessionId}`
-    await AsyncStorage.setItem(key, JSON.stringify(messages))
+    const key = `${STORAGE_KEY_PREFIX}deleted_`
+    const existing = await AsyncStorage.getItem(key) || '[]'
+    const deleted = JSON.parse(existing) as string[]
+    if (!deleted.includes(sessionId)) {
+      deleted.push(sessionId)
+      await AsyncStorage.setItem(key, JSON.stringify(deleted))
+    }
   } catch (err) {
-    console.error('Failed to save messages to storage:', err)
+    console.error('Failed to save deleted session:', err)
   }
 }
 
-const getMessagesFromStorage = async (sessionId: string): Promise<Message[] | null> => {
+const isSessionDeleted = async (sessionId: string): Promise<boolean> => {
   try {
-    const key = `${STORAGE_KEY_PREFIX}${sessionId}`
+    const key = `${STORAGE_KEY_PREFIX}deleted_`
     const data = await AsyncStorage.getItem(key)
-    return data ? JSON.parse(data) : null
+    if (!data) return false
+    const deleted = JSON.parse(data) as string[]
+    return deleted.includes(sessionId)
   } catch (err) {
-    console.error('Failed to get messages from storage:', err)
-    return null
+    return false
   }
 }
 
-const clearMessagesFromStorage = async (sessionId: string) => {
+// Remove a session from the deleted list (used when re-importing)
+const removeDeletedSession = async (sessionId: string) => {
   try {
-    const key = `${STORAGE_KEY_PREFIX}${sessionId}`
-    await AsyncStorage.removeItem(key)
+    const key = `${STORAGE_KEY_PREFIX}deleted_`
+    const data = await AsyncStorage.getItem(key)
+    if (!data) return
+    const deleted = JSON.parse(data) as string[]
+    const filtered = deleted.filter(id => id !== sessionId)
+    if (filtered.length !== deleted.length) {
+      await AsyncStorage.setItem(key, JSON.stringify(filtered))
+    }
   } catch (err) {
-    console.error('Failed to clear messages from storage:', err)
+    console.error('Failed to remove deleted session:', err)
   }
 }
 
@@ -41,7 +54,6 @@ type SessionState = {
   messages: Record<string, Message[]>
   recentProjects: RecentProject[]
   isLoading: boolean
-  isRefreshing: boolean
   isCreating: boolean
   error: string | null
 
@@ -50,13 +62,13 @@ type SessionState = {
   fetchMessages: (sessionId: string) => Promise<void>
   refreshMessages: (sessionId: string) => Promise<void>
   addMessage: (sessionId: string, message: Message) => void
-  updateLastAssistantMessage: (sessionId: string, content: string) => void
+  updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void
   createSession: (workDir?: string) => Promise<string | null>
   deleteSession: (sessionId: string) => Promise<void>
-  importSessions: (sessionIds: string[]) => Promise<number>
+  importSessions: (sessionIds: string[], sessionInfos?: Session[]) => Promise<number>
   fetchRecentProjects: () => Promise<void>
+  updateSessionTitle: (sessionId: string, title: string) => void
   clearError: () => void
-  clearSessionMessages: (sessionId: string) => void
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -65,18 +77,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   messages: {},
   recentProjects: [],
   isLoading: false,
-  isRefreshing: false,
   isCreating: false,
   error: null,
 
   fetchSessions: async () => {
-    set({ isLoading: true, error: null })
+    // Silent refresh if we already have data, to avoid UI flicker
+    const hasExistingData = get().sessions.length > 0
+    if (!hasExistingData) {
+      set({ isLoading: true })
+    }
+    set({ error: null })
     try {
       const sessions = await apiClient.getSessions()
-      const uniqueSessions = sessions.filter((s, i, arr) =>
-        i === arr.findIndex(x => x?.id === s?.id)
-      )
-      set({ sessions: uniqueSessions, isLoading: false })
+      console.log('[Store] Raw sessions from server:', sessions.length)
+      // Filter out deleted sessions
+      const filteredSessions = []
+      for (const session of sessions) {
+        if (session && !(await isSessionDeleted(session.id))) {
+          filteredSessions.push(session)
+        }
+      }
+      console.log('[Store] Filtered sessions:', filteredSessions.length)
+      set({ sessions: filteredSessions, isLoading: false })
     } catch (err) {
       console.log('Sessions not available:', err instanceof Error ? err.message : 'unknown')
       set({
@@ -106,22 +128,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   refreshMessages: async (sessionId) => {
-    set({ isRefreshing: true })
+    // Silent refresh - don't set isLoading to avoid UI flicker
     try {
       const messages = await apiClient.getMessages(sessionId)
       set((state) => ({
         messages: { ...state.messages, [sessionId]: messages },
-        isRefreshing: false,
       }))
     } catch (err) {
       console.error('Failed to refresh messages:', err)
-      set({ isRefreshing: false })
     }
   },
 
   addMessage: (sessionId, message) => {
     set((state) => {
       const existing = state.messages[sessionId] || []
+      // 避免重复添加相同 ID 的消息
+      if (existing.some(m => m.id === message.id)) {
+        console.log('[Store] Message already exists, skipping:', message.id)
+        return state
+      }
       return {
         messages: {
           ...state.messages,
@@ -131,19 +156,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     })
   },
 
-  updateLastAssistantMessage: (sessionId, content) => {
+  updateMessage: (sessionId, messageId, updates) => {
     set((state) => {
-      const existing = state.messages[sessionId] || []
-      if (existing.length === 0) return state
-
-      const lastMsg = existing[existing.length - 1]
-      if (lastMsg.type !== 'assistant_text') return state
-
+      const existing = state.messages[sessionId]
+      if (!existing) return state
+      const idx = existing.findIndex(m => m.id === messageId)
+      if (idx === -1) return state
       const updated = [...existing]
-      updated[updated.length - 1] = { ...lastMsg, content }
-
+      updated[idx] = { ...updated[idx], ...updates }
       return {
-        messages: { ...state.messages, [sessionId]: updated },
+        messages: {
+          ...state.messages,
+          [sessionId]: updated,
+        },
       }
     })
   },
@@ -153,10 +178,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const result = await apiClient.createSession(workDir)
       console.log('Created session:', result.sessionId)
-
-      // Refresh sessions list
+      // Remove from deleted list so fetchSessions won't filter it out
+      await removeDeletedSession(result.sessionId)
       await get().fetchSessions()
-
       set({ isCreating: false })
       return result.sessionId
     } catch (err) {
@@ -166,13 +190,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
   },
 
+  // 删除对话 - 只删除本地显示，不影响桌面端
   deleteSession: async (sessionId: string) => {
     try {
-      // Call API to delete session from server
-      await apiClient.deleteSession(sessionId)
-      // Clear local messages
-      await clearMessagesFromStorage(sessionId)
-      // Remove from local state
+      // 保存到已删除列表
+      await saveDeletedSession(sessionId)
+      // 从本地状态移除
       set((state) => {
         const newSessions = state.sessions.filter(s => s?.id !== sessionId)
         const newMessages = { ...state.messages }
@@ -189,21 +212,34 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   // 导入选中的对话（从服务器获取消息并保存到本地）
-  importSessions: async (sessionIds: string[]) => {
+  importSessions: async (sessionIds: string[], sessionInfos?: Session[]) => {
     let importedCount = 0
-    for (const sessionId of sessionIds) {
+    for (let i = 0; i < sessionIds.length; i++) {
+      const sessionId = sessionIds[i]
       try {
-        // 从服务器获取消息
         const messages = await apiClient.getMessages(sessionId)
-        // 保存到本地
-        await saveMessagesToStorage(sessionId, messages)
+        const sessionInfo = sessionInfos?.find(s => s.id === sessionId)
+
+        // Remove from deleted list so fetchSessions won't filter it out
+        await removeDeletedSession(sessionId)
+
+        set((state) => {
+          const newMessages = { ...state.messages, [sessionId]: messages }
+          // 如果提供了会话信息，直接添加到会话列表
+          let newSessions = state.sessions
+          if (sessionInfo && !state.sessions.some(s => s?.id === sessionId)) {
+            newSessions = [...state.sessions, sessionInfo]
+          }
+          return {
+            messages: newMessages,
+            sessions: newSessions,
+          }
+        })
         importedCount++
       } catch (err) {
         console.error(`Failed to import session ${sessionId}:`, err)
       }
     }
-    // 刷新会话列表
-    await useSessionStore.getState().fetchSessions()
     return importedCount
   },
 
@@ -212,7 +248,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const projects = await apiClient.getRecentProjects()
       set({ recentProjects: projects })
     } catch (err) {
-      // 静默处理，不影响主功能
       console.log('Recent projects not available:', err instanceof Error ? err.message : 'unknown')
       set({ recentProjects: [] })
     }
@@ -220,12 +255,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   clearError: () => set({ error: null }),
 
-  clearSessionMessages: async (sessionId) => {
-    await clearMessagesFromStorage(sessionId)
-    set((state) => {
-      const newMessages = { ...state.messages }
-      delete newMessages[sessionId]
-      return { messages: newMessages }
-    })
+  updateSessionTitle: (sessionId, title) => {
+    set((state) => ({
+      sessions: state.sessions.map(s =>
+        s?.id === sessionId ? { ...s, title } : s
+      ),
+    }))
   },
 }))

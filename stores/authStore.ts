@@ -8,6 +8,8 @@ type User = {
   name: string
 }
 
+export type ThemeMode = 'light' | 'dark' | 'system'
+
 type AuthState = {
   user: User | null
   token: string | null
@@ -15,12 +17,14 @@ type AuthState = {
   tunnelUrl: string | null
   isLoggedIn: boolean
   isHydrated: boolean
+  themeMode: ThemeMode
 
   login: (user: User, token: string) => void
   logout: () => void
   setServerUrl: (url: string) => void
   setTunnelUrl: (url: string) => void
   setHydrated: () => void
+  setThemeMode: (mode: ThemeMode) => void
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -32,6 +36,7 @@ export const useAuthStore = create<AuthState>()(
       tunnelUrl: null,
       isLoggedIn: false,
       isHydrated: false,
+      themeMode: 'system',
 
       login: (user, token) => set({ user, token, isLoggedIn: true }),
 
@@ -42,6 +47,8 @@ export const useAuthStore = create<AuthState>()(
       setTunnelUrl: (url) => set({ tunnelUrl: url }),
 
       setHydrated: () => set({ isHydrated: true }),
+
+      setThemeMode: (mode) => set({ themeMode: mode }),
     }),
     {
       name: 'auth-storage',
@@ -57,6 +64,7 @@ export const useAuthStore = create<AuthState>()(
         serverUrl: state.serverUrl,
         tunnelUrl: state.tunnelUrl,
         isLoggedIn: state.isLoggedIn,
+        themeMode: state.themeMode,
       }),
     }
   )

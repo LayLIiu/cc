@@ -11,8 +11,17 @@ export type Session = {
 
 export type Message = {
   id: string
-  type: string
+  type: string // 'user_text' | 'assistant_text' | 'tool_use' | 'tool_result' | 'thinking'
   content: string
   timestamp: string
+  // Tool use fields
+  toolName?: string
+  toolInput?: Record<string, any>
+  // Tool result fields
+  toolResult?: any
+  toolStatus?: 'pending' | 'running' | 'completed' | 'failed'
+  toolDuration?: number
+  // Thinking fields
+  isStreaming?: boolean
 }
 

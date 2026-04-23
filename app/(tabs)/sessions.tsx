@@ -1,4 +1,5 @@
 import { useEffect, useCallback, useState } from 'react'
+import { useFocusEffect, useLocalSearchParams } from 'expo-router'
 import {
   View,
   FlatList,
@@ -38,9 +39,15 @@ export default function SessionsScreen() {
   const [customPath, setCustomPath] = useState('')
 
   useEffect(() => {
-    fetchSessions()
     fetchRecentProjects()
-  }, [fetchSessions, fetchRecentProjects])
+  }, [fetchRecentProjects])
+
+  useFocusEffect(
+    useCallback(() => {
+      console.log('[Sessions] Page focused, fetching sessions...')
+      fetchSessions()
+    }, [fetchSessions])
+  )
 
   const handleRefresh = useCallback(() => {
     fetchSessions()
@@ -262,7 +269,7 @@ export default function SessionsScreen() {
                     <TouchableOpacity
                       key={project.projectPath}
                       style={[styles.projectItem, { backgroundColor: colors.background, borderColor: colors.border }]}
-                      onPress={() => handleSelectProject(project.projectPath)}
+                      onPress={() => handleSelectProject(project.realPath)}
                       disabled={isCreating}
                     >
                       <View style={styles.projectInfo}>

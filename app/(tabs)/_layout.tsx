@@ -18,10 +18,6 @@ export default function TabsLayout() {
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '500',
-        },
         headerStyle: {
           backgroundColor: colors.background,
         },
@@ -36,19 +32,9 @@ export default function TabsLayout() {
         name="sessions"
         options={{
           title: 'Claude Code',
-          tabBarLabel: '会话',
+          tabBarLabel: () => null,
           tabBarIcon: ({ color, focused }) => (
             <TabIcon icon="💬" label="会话" color={color} focused={focused} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="demo"
-        options={{
-          title: '组件演示',
-          tabBarLabel: '演示',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon="✨" label="演示" color={color} focused={focused} />
           ),
         }}
       />
@@ -56,7 +42,7 @@ export default function TabsLayout() {
         name="settings"
         options={{
           title: '设置',
-          tabBarLabel: '设置',
+          tabBarLabel: () => null,
           tabBarIcon: ({ color, focused }) => (
             <TabIcon icon="⚙️" label="设置" color={color} focused={focused} />
           ),

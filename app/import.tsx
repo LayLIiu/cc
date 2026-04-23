@@ -75,10 +75,14 @@ export default function ImportScreen() {
 
     setIsImporting(true)
     try {
-      const count = await importSessions(Array.from(selectedIds))
+      // 获取选中的会话信息
+      const selectedSessions = serverSessions.filter(s => selectedIds.has(s.id))
+      const count = await importSessions(Array.from(selectedIds), selectedSessions)
+      console.log('[Import] Imported', count, 'sessions')
       Alert.alert('成功', `已导入 ${count} 个对话`)
       router.back()
     } catch (err) {
+      console.error('[Import] Failed:', err)
       Alert.alert('错误', '导入失败')
     } finally {
       setIsImporting(false)

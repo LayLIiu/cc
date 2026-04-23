@@ -1,7 +1,9 @@
 import { View, Text, StyleSheet } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import type { Message } from '@/types/session'
-import { MarkdownRenderer } from './index'
+import { MarkdownRenderer } from './markdown/MarkdownRenderer'
+import { ToolCallBlock } from './chat/ToolCallBlock'
+import { ThinkingBlock } from './chat/ThinkingBlock'
 
 type MessageBubbleProps = {
   message: Message
@@ -29,6 +31,33 @@ export function MessageBubble({ message, isLast }: MessageBubbleProps) {
         <View style={[styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <MarkdownRenderer content={message.content} />
         </View>
+      </View>
+    )
+  }
+
+  // Tool use message - show as collapsible tool call block
+  if (message.type === 'tool_use') {
+    return (
+      <View style={[styles.toolWrapper, isLast && styles.lastMessage]}>
+        <ToolCallBlock
+          toolName={message.toolName || 'Unknown'}
+          input={message.toolInput || {}}
+          status={message.toolStatus || 'completed'}
+          result={message.toolResult}
+          duration={message.toolDuration}
+        />
+      </View>
+    )
+  }
+
+  // Thinking message - show as collapsible thinking block
+  if (message.type === 'thinking') {
+    return (
+      <View style={[styles.thinkingWrapper, isLast && styles.lastMessage]}>
+        <ThinkingBlock
+          content={message.content}
+          isStreaming={message.isStreaming}
+        />
       </View>
     )
   }
@@ -75,5 +104,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderBottomLeftRadius: 8,
     borderWidth: 1,
+  },
+
+  toolWrapper: {
+    marginHorizontal: 16,
+    marginBottom: 4,
+  },
+
+  thinkingWrapper: {
+    marginBottom: 4,
   },
 })

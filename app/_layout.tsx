@@ -1,21 +1,21 @@
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
-import { useColorScheme } from 'react-native'
+import { useTheme } from '@/utils/theme'
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme()
+  const { isDark, colors } = useTheme()
 
   return (
     <>
-      <StatusBar style="auto" />
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerStyle: {
-            backgroundColor: colorScheme === 'dark' ? '#1a1a1a' : '#ffffff',
+            backgroundColor: colors.surface,
           },
-          headerTintColor: colorScheme === 'dark' ? '#ffffff' : '#000000',
+          headerTintColor: colors.text,
           contentStyle: {
-            backgroundColor: colorScheme === 'dark' ? '#0a0a0a' : '#f5f5f5',
+            backgroundColor: colors.background,
           },
         }}
       >
