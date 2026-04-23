@@ -1,54 +1,57 @@
-import { Tabs } from 'expo-router'
+import { Tabs, usePathname, useRouter } from 'expo-router'
+import { View, StyleSheet } from 'react-native'
 import { useTheme } from '@/utils/theme'
-import { TabIcon } from '@/components/TabIcon'
+import { SegmentedTab } from '@/components/SegmentedTab'
 
 export default function TabsLayout() {
-  const { colors, isDark } = useTheme()
+  const { colors } = useTheme()
+  const pathname = usePathname()
+  const router = useRouter()
+
+  const tabs = [
+    { key: 'sessions', label: '会话', icon: '💬' },
+    { key: 'settings', label: '设置', icon: '⚙️' },
+  ]
+
+  // Get current tab from pathname
+  const currentTab = pathname.split('/')[1] || 'sessions'
+
+  const handleTabPress = (key: string) => {
+    router.push(`/${key}`)
+  }
 
   return (
-    <Tabs
-      screenOptions={{
-        tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor: colors.border,
-          borderTopWidth: 1,
-          height: 90,
-          paddingBottom: 8,
-          paddingTop: 8,
-        },
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textTertiary,
-        headerStyle: {
-          backgroundColor: colors.background,
-        },
-        headerTintColor: colors.text,
-        headerTitleStyle: {
-          fontWeight: '600',
-        },
-        headerShadowVisible: false,
-      }}
-    >
-      <Tabs.Screen
-        name="sessions"
-        options={{
-          title: 'Claude Code',
-          tabBarLabel: () => null,
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon="💬" label="会话" color={color} focused={focused} />
-          ),
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* Page content */}
+      <Tabs
+        screenOptions={{
+          tabBarStyle: { display: 'none' },
+          headerShown: false,
+          contentStyle: { backgroundColor: 'transparent' },
         }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: '设置',
-          tabBarLabel: () => null,
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon icon="⚙️" label="设置" color={color} focused={focused} />
-          ),
-        }}
-      />
-    </Tabs>
+      >
+        <Tabs.Screen name="sessions" />
+        <Tabs.Screen name="settings" />
+      </Tabs>
+
+      {/* Bottom Segmented Tab */}
+      <View style={styles.tabContainer}>
+        <SegmentedTab
+          tabs={tabs}
+          activeTab={currentTab}
+          onTabPress={handleTabPress}
+        />
+      </View>
+    </View>
   )
 }
 
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  tabContainer: {
+    paddingBottom: 20,
+    paddingTop: 8,
+  },
+})

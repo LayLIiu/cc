@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Text,
   TouchableOpacity,
+  Animated,
 } from 'react-native'
 import { useLocalSearchParams, Stack, useNavigation } from 'expo-router'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -44,6 +45,7 @@ export default function ChatScreen() {
     addMessage,
     updateMessage,
     updateSessionStatus,
+    sessionStatuses,
     sessions,
     fetchSessions,
     updateSessionTitle,
@@ -51,6 +53,14 @@ export default function ChatScreen() {
   } = useSessionStore()
 
   const session = sessions.find((s): s is NonNullable<typeof s> => s?.id === id)
+
+  // 从保存的状态中读取当前会话状态，进入页面时立即显示
+  const getInitialStatus = useCallback(() => {
+    if (id && sessionStatuses[id]) {
+      return sessionStatuses[id]
+    }
+    return 'idle'
+  }, [id, sessionStatuses])
 
   // Update header title when session title changes
   useEffect(() => {
@@ -77,10 +87,59 @@ export default function ChatScreen() {
     description?: string
   } | null>(null)
 
+  // 进入页面时，立即从保存的状态恢复
+  useEffect(() => {
+    const savedStatus = getInitialStatus()
+    if (savedStatus !== 'idle') {
+      setChatStatus(savedStatus)
+
+      // 设置超时：如果 3 秒内没有收到状态更新，说明 AI 已经完成
+      statusCheckTimeoutRef.current = setTimeout(() => {
+        setChatStatus('idle')
+        if (id) updateSessionStatus(id, 'idle')
+      }, 3000)
+    }
+
+    return () => {
+      if (statusCheckTimeoutRef.current) {
+        clearTimeout(statusCheckTimeoutRef.current)
+        statusCheckTimeoutRef.current = null
+      }
+    }
+  }, [id, getInitialStatus, updateSessionStatus])
+
   const flatListRef = useRef<FlatList>(null)
   const processedIds = useRef(new Set<string>())
-  const addedMessageContents = useRef(new Set<string>())
+  const addedMessageContents = useRef(new Set<string>()) // 使用内容去重
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const statusCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 状态点闪烁动画
+  const dotOpacity = useRef(new Animated.Value(1)).current
+
+  useEffect(() => {
+    if (chatStatus !== 'idle') {
+      // 创建闪烁动画
+      const animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(dotOpacity, {
+            toValue: 0.3,
+            duration: 500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(dotOpacity, {
+            toValue: 1,
+            duration: 500,
+            useNativeDriver: true,
+          }),
+        ])
+      )
+      animation.start()
+      return () => animation.stop()
+    } else {
+      dotOpacity.setValue(1)
+    }
+  }, [chatStatus, dotOpacity])
 
   // Track stream state for pairing tool_use with tool_result
   const streamStateRef = useRef<StreamState>({
@@ -103,7 +162,6 @@ export default function ChatScreen() {
   // Update session status when chatStatus changes
   useEffect(() => {
     if (id) {
-      console.log('[Chat] Updating session status:', id, chatStatus)
       updateSessionStatus(id, chatStatus)
     }
   }, [id, chatStatus, updateSessionStatus])
@@ -112,46 +170,58 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!lastMessage) return
 
-    const msgId = JSON.stringify(lastMessage)
+    // 使用消息类型+时间戳作为去重键，避免 JSON.stringify
+    const msgId = `${lastMessage.type}-${lastMessage.timestamp || Date.now()}`
     if (processedIds.current.has(msgId)) {
       clearLastMessage()
       return
     }
     processedIds.current.add(msgId)
-    if (processedIds.current.size > 100) {
-      processedIds.current = new Set(Array.from(processedIds.current).slice(-60))
+    // 限制缓存大小
+    if (processedIds.current.size > 200) {
+      const arr = Array.from(processedIds.current)
+      processedIds.current = new Set(arr.slice(-100))
     }
 
     const streamState = streamStateRef.current
 
     switch (lastMessage.type) {
       case 'connected':
-        console.log('[Chat] Connected to session:', id)
         break
 
       case 'content_start': {
-        // A new content block is starting
+        // 收到内容开始，清除超时检查
+        if (statusCheckTimeoutRef.current) {
+          clearTimeout(statusCheckTimeoutRef.current)
+          statusCheckTimeoutRef.current = null
+        }
         if (lastMessage.blockType === 'text') {
           streamState.inTextBlock = true
           streamState.textBuffer = ''
           setStreamingText('')
         }
-        // For tool_use blocks, we'll create the tool_use message when tool_use_complete arrives
         break
       }
 
       case 'content_delta': {
-        // Incremental text or tool input
+        // 收到内容增量，清除超时检查
+        if (statusCheckTimeoutRef.current) {
+          clearTimeout(statusCheckTimeoutRef.current)
+          statusCheckTimeoutRef.current = null
+        }
         if (lastMessage.text) {
           streamState.textBuffer += lastMessage.text
           setStreamingText(streamState.textBuffer)
         }
-        // toolInput delta is not displayed in real-time (too verbose)
         break
       }
 
       case 'thinking': {
-        // Thinking process incremental text
+        // 收到思考内容，清除超时检查
+        if (statusCheckTimeoutRef.current) {
+          clearTimeout(statusCheckTimeoutRef.current)
+          statusCheckTimeoutRef.current = null
+        }
         if (!streamState.inThinkingBlock) {
           streamState.inThinkingBlock = true
           streamState.thinkingBuffer = ''
@@ -162,7 +232,6 @@ export default function ChatScreen() {
       }
 
       case 'tool_use_complete': {
-        // A tool call has completed - add it as a message
         const toolUseId = lastMessage.toolUseId || `tool-${Date.now()}`
         streamState.pendingToolUseIds.add(toolUseId)
 
@@ -177,7 +246,6 @@ export default function ChatScreen() {
         }
         if (id) addMessage(id, toolMsg)
 
-        // Clear streaming text since we're now in tool execution
         if (streamState.textBuffer) {
           const textMsg: Message = {
             id: `ws-text-${Date.now()}`,
@@ -191,7 +259,6 @@ export default function ChatScreen() {
           setStreamingText('')
         }
 
-        // Clear thinking if we had one
         if (streamState.thinkingBuffer) {
           const thinkMsg: Message = {
             id: `ws-think-${Date.now()}`,
@@ -208,7 +275,6 @@ export default function ChatScreen() {
       }
 
       case 'tool_result': {
-        // Tool execution result - update the matching tool_use message
         const toolUseId = lastMessage.toolUseId
         if (id && toolUseId) {
           const resultContent = lastMessage.content
@@ -229,7 +295,11 @@ export default function ChatScreen() {
       }
 
       case 'message_complete': {
-        // Turn is complete - save any remaining streaming content
+        // 收到完成消息，清除超时检查
+        if (statusCheckTimeoutRef.current) {
+          clearTimeout(statusCheckTimeoutRef.current)
+          statusCheckTimeoutRef.current = null
+        }
         if (streamState.textBuffer) {
           const textMsg: Message = {
             id: `ws-text-${Date.now()}`,
@@ -249,7 +319,6 @@ export default function ChatScreen() {
           if (id) addMessage(id, thinkMsg)
         }
 
-        // Reset all streaming state
         streamState.textBuffer = ''
         streamState.thinkingBuffer = ''
         streamState.inTextBlock = false
@@ -262,8 +331,11 @@ export default function ChatScreen() {
       }
 
       case 'status': {
-        // Status update (thinking, tool_executing, streaming, idle, permission_pending)
-        const state = lastMessage.state as StreamState extends { pendingToolUseIds: any } ? never : string
+        // 收到状态更新，清除超时检查
+        if (statusCheckTimeoutRef.current) {
+          clearTimeout(statusCheckTimeoutRef.current)
+          statusCheckTimeoutRef.current = null
+        }
         if (lastMessage.state) {
           setChatStatus(lastMessage.state as any)
         }
@@ -274,10 +346,8 @@ export default function ChatScreen() {
       }
 
       case 'user_message_echo':
-        // User message from another client - add it to messages
-        console.log('[Chat] Received user_message_echo')
         if (id && lastMessage.content) {
-          // Check if message already exists (avoid duplicate from local send)
+          // 使用内容去重（避免本地发送和 echo 重复）
           const contentKey = `user-${lastMessage.content}`
           if (!addedMessageContents.current.has(contentKey)) {
             addedMessageContents.current.add(contentKey)
@@ -293,8 +363,6 @@ export default function ChatScreen() {
         break
 
       case 'permission_request': {
-        // Show permission dialog for user to approve or deny
-        console.log('[Chat] Permission request:', lastMessage.toolName)
         setPermissionRequest({
           requestId: lastMessage.requestId,
           toolName: lastMessage.toolName || 'Unknown',
@@ -307,17 +375,13 @@ export default function ChatScreen() {
       }
 
       case 'session_title_updated': {
-        // Update session title in store and header
         if (lastMessage.sessionId && lastMessage.title) {
-          console.log('[Chat] Session title updated:', lastMessage.title)
           updateSessionTitle(lastMessage.sessionId, lastMessage.title)
         }
         break
       }
 
       case 'error':
-        console.error('[Chat] Server error:', lastMessage.message)
-        // Reset streaming state on error
         streamState.textBuffer = ''
         streamState.thinkingBuffer = ''
         streamState.inTextBlock = false
@@ -326,13 +390,10 @@ export default function ChatScreen() {
         setStreamingThinking('')
         setChatStatus('idle')
         break
-
-      default:
-        console.log('[Chat] Unhandled message type:', lastMessage.type)
     }
 
     clearLastMessage()
-  }, [lastMessage, id, addMessage, updateMessage, clearLastMessage, send, updateSessionTitle])
+  }, [lastMessage, id, addMessage, updateMessage, clearLastMessage, updateSessionTitle])
 
   const handleSend = useCallback((content: string) => {
     if (!content.trim()) return
@@ -507,12 +568,36 @@ export default function ChatScreen() {
     </View>
   )
 
+  // 自定义标题组件（包含标题和状态）
+  const HeaderTitle = useCallback(() => (
+    <View style={styles.headerContent}>
+      <Text style={[styles.headerTitle, { color: colors.text }]}>
+        {session?.title || '对话'}
+      </Text>
+      <View style={styles.statusIndicator}>
+        {chatStatus !== 'idle' && (
+          <Animated.View style={[
+            styles.statusDot,
+            { backgroundColor: '#22c55e', opacity: dotOpacity }
+          ]} />
+        )}
+        <Text style={[
+          styles.statusText,
+          { color: chatStatus !== 'idle' ? '#22c55e' : colors.textTertiary }
+        ]}>
+          {chatStatus !== 'idle' ? '工作中' : '等待中'}
+        </Text>
+      </View>
+    </View>
+  ), [session?.title, chatStatus, colors, dotOpacity])
+
   return (
     <>
       <Stack.Screen
         options={{
-          title: session?.title || '对话',
+          headerTitle: HeaderTitle,
           headerBackTitle: '返回',
+          headerTitleAlign: 'center',
         }}
       />
       {Platform.OS === 'ios' ? (
@@ -533,6 +618,32 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  headerContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  statusIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
   listContent: { padding: 16, paddingBottom: 8 },
   scrollToBottom: {
     position: 'absolute',

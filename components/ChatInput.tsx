@@ -50,9 +50,8 @@ const ChatInputComponent = ({ onSend, onStop, placeholder = '发送消息...', c
         placeholderTextColor={colors.textTertiary}
         multiline
         maxLength={4000}
-        editable={!isWorking}
       />
-      {isWorking ? (
+      {isWorking && !text.trim() ? (
         <TouchableOpacity
           style={styles.stopButton}
           onPress={handleStop}

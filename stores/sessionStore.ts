@@ -52,6 +52,7 @@ type SessionState = {
   sessions: Session[]
   currentSessionId: string | null
   messages: Record<string, Message[]>
+  messageIds: Record<string, Set<string>> // 快速查重
   sessionStatuses: Record<string, SessionStatus>
   recentProjects: RecentProject[]
   isLoading: boolean
@@ -77,6 +78,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
   messages: {},
+  messageIds: {},
   sessionStatuses: {},
   recentProjects: [],
   isLoading: false,
@@ -122,8 +124,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   fetchMessages: async (sessionId) => {
     try {
       const messages = await apiClient.getMessages(sessionId)
+      // 创建消息 ID Set 用于快速查重
+      const ids = new Set(messages.map(m => m.id))
       set((state) => ({
         messages: { ...state.messages, [sessionId]: messages },
+        messageIds: { ...state.messageIds, [sessionId]: ids },
       }))
     } catch (err) {
       console.error('Failed to fetch messages:', err)
@@ -131,11 +136,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   refreshMessages: async (sessionId) => {
-    // Silent refresh - don't set isLoading to avoid UI flicker
     try {
       const messages = await apiClient.getMessages(sessionId)
+      const ids = new Set(messages.map(m => m.id))
       set((state) => ({
         messages: { ...state.messages, [sessionId]: messages },
+        messageIds: { ...state.messageIds, [sessionId]: ids },
       }))
     } catch (err) {
       console.error('Failed to refresh messages:', err)
@@ -144,16 +150,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   addMessage: (sessionId, message) => {
     set((state) => {
-      const existing = state.messages[sessionId] || []
-      // 避免重复添加相同 ID 的消息
-      if (existing.some(m => m.id === message.id)) {
-        console.log('[Store] Message already exists, skipping:', message.id)
+      const ids = state.messageIds[sessionId] || new Set()
+      // 快速查重
+      if (ids.has(message.id)) {
         return state
       }
+      const existing = state.messages[sessionId] || []
+      const newIds = new Set(ids)
+      newIds.add(message.id)
       return {
         messages: {
           ...state.messages,
           [sessionId]: [...existing, message],
+        },
+        messageIds: {
+          ...state.messageIds,
+          [sessionId]: newIds,
         },
       }
     })
@@ -205,16 +217,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   // 删除对话 - 只删除本地显示，不影响桌面端
   deleteSession: async (sessionId: string) => {
     try {
-      // 保存到已删除列表
       await saveDeletedSession(sessionId)
-      // 从本地状态移除
       set((state) => {
         const newSessions = state.sessions.filter(s => s?.id !== sessionId)
         const newMessages = { ...state.messages }
+        const newMessageIds = { ...state.messageIds }
         delete newMessages[sessionId]
+        delete newMessageIds[sessionId]
         return {
           sessions: newSessions,
           messages: newMessages,
+          messageIds: newMessageIds,
         }
       })
     } catch (err) {
@@ -232,18 +245,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const messages = await apiClient.getMessages(sessionId)
         const sessionInfo = sessionInfos?.find(s => s.id === sessionId)
 
-        // Remove from deleted list so fetchSessions won't filter it out
         await removeDeletedSession(sessionId)
 
+        const ids = new Set(messages.map(m => m.id))
         set((state) => {
           const newMessages = { ...state.messages, [sessionId]: messages }
-          // 如果提供了会话信息，直接添加到会话列表
+          const newMessageIds = { ...state.messageIds, [sessionId]: ids }
           let newSessions = state.sessions
           if (sessionInfo && !state.sessions.some(s => s?.id === sessionId)) {
             newSessions = [...state.sessions, sessionInfo]
           }
           return {
             messages: newMessages,
+            messageIds: newMessageIds,
             sessions: newSessions,
           }
         })

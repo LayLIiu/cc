@@ -158,8 +158,13 @@ export default function SessionsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* New Session Button */}
+      {/* Header */}
       <View style={styles.header}>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Claude Code</Text>
+      </View>
+
+      {/* New Session Button */}
+      <View style={styles.headerRow}>
         <TouchableOpacity
           style={[styles.newButton, { backgroundColor: colors.primary }]}
           onPress={handleNewSession}
@@ -323,8 +328,19 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   header: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 60,
     paddingBottom: 0,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  headerRow: {
+    paddingHorizontal: 16,
+    marginTop: 8,
   },
   newButton: {
     borderRadius: 12,

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, Modal } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, Modal, ActivityIndicator } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore, type ThemeMode } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
@@ -25,6 +25,67 @@ export default function SettingsScreen() {
   const [showThemeModal, setShowThemeModal] = useState(false)
   const [showLogoutModal, setShowLogoutModal] = useState(false)
   const [tempUrl, setTempUrl] = useState('')
+
+  // 连接速度测试状态
+  const [testingLatency, setTestingLatency] = useState(false)
+  const [latency, setLatency] = useState<number | null>(null)
+
+  // 测试连接延迟
+  const testLatency = async () => {
+    if (!serverUrl) return
+
+    setTestingLatency(true)
+    setLatency(null)
+
+    try {
+      const start = Date.now()
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 15000) // 15秒超时
+
+      const response = await fetch(`${serverUrl}/api/sessions`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      })
+
+      clearTimeout(timeoutId)
+      const end = Date.now()
+      const duration = end - start
+
+      if (response.ok || response.status === 401) {
+        // 401 也算连接成功，只是未授权
+        setLatency(duration)
+      } else {
+        setLatency(-1) // 请求失败
+      }
+    } catch (err: any) {
+      console.log('Latency test error:', err)
+      setLatency(-1) // 连接失败
+    } finally {
+      setTestingLatency(false)
+    }
+  }
+
+  // 格式化延迟显示
+  const formatLatency = (ms: number) => {
+    if (ms < 0) return '连接失败'
+    if (ms < 100) return `${ms}ms (极快)`
+    if (ms < 300) return `${ms}ms (很快)`
+    if (ms < 500) return `${ms}ms (较快)`
+    if (ms < 1000) return `${ms}ms (一般)`
+    return `${ms}ms (较慢)`
+  }
+
+  // 获取延迟颜色
+  const getLatencyColor = (ms: number) => {
+    if (ms < 0) return colors.error
+    if (ms < 100) return '#22c55e'
+    if (ms < 300) return '#84cc16'
+    if (ms < 500) return '#eab308'
+    return '#f97316'
+  }
 
   const handleLogout = () => {
     setShowLogoutModal(true)
@@ -52,7 +113,8 @@ export default function SettingsScreen() {
       url = url.replace(/\/+$/, '')
       setServerUrl(url)
       setShowUrlModal(false)
-      Alert.alert('成功', `服务器地址已更新为:\n${url}`)
+      // 清除之前的延迟测试结果
+      setLatency(null)
     }
   }
 
@@ -91,6 +153,35 @@ export default function SettingsScreen() {
               </Text>
             </View>
             <Text style={[styles.editHint, { color: colors.primary }]}>编辑</Text>
+          </TouchableOpacity>
+
+          {/* 分割线 */}
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+          {/* 连接速度 */}
+          <TouchableOpacity style={styles.latencyRow} onPress={testLatency} disabled={testingLatency}>
+            <View style={styles.latencyInfo}>
+              <Text style={[styles.label, { color: colors.text }]}>连接速度</Text>
+              {testingLatency ? (
+                <View style={styles.latencyLoading}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={[styles.latencyValue, { color: colors.textSecondary, marginLeft: 8 }]}>
+                    测试中...
+                  </Text>
+                </View>
+              ) : latency !== null ? (
+                <Text style={[styles.latencyValue, { color: getLatencyColor(latency) }]}>
+                  {formatLatency(latency)}
+                </Text>
+              ) : (
+                <Text style={[styles.latencyValue, { color: colors.textTertiary }]}>
+                  点击测试
+                </Text>
+              )}
+            </View>
+            {!testingLatency && (
+              <Text style={[styles.editHint, { color: colors.primary }]}>测试</Text>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -343,6 +434,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     marginLeft: 12,
+  },
+  divider: {
+    height: 1,
+    marginVertical: 12,
+  },
+  latencyRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  latencyInfo: {
+    flex: 1,
+  },
+  latencyLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  latencyValue: {
+    fontSize: 13,
+    marginTop: 4,
   },
   hint: {
     fontSize: 12,

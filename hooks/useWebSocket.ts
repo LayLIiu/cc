@@ -85,6 +85,8 @@ export function useWebSocket(sessionId: string | null) {
         console.log('[WebSocket] Connected')
         setStatus('connected')
         reconnectAttempts.current = 0
+        // 连接成功后请求服务器发送当前会话状态
+        ws.send(JSON.stringify({ type: 'get_status' }))
       }
 
       ws.onmessage = (event) => {
