@@ -373,9 +373,15 @@ export default function ChatScreen() {
   }, [id, refreshMessages])
 
   // Build the complete message list including streaming content
+  // For inverted FlatList, we reverse the order so newest messages appear at the "bottom" (which is visually the top in inverted mode)
   const allMessages = [
-    ...(messages[id!] || []),
-    // Add streaming thinking block
+    // Streaming content goes first (will appear at bottom in inverted list)
+    ...(streamingText ? [{
+      id: 'streaming-text',
+      type: 'assistant_text' as const,
+      content: streamingText,
+      timestamp: String(Date.now()),
+    }] : []),
     ...(streamingThinking ? [{
       id: 'streaming-thinking',
       type: 'thinking' as const,
@@ -383,13 +389,8 @@ export default function ChatScreen() {
       timestamp: String(Date.now()),
       isStreaming: true,
     }] : []),
-    // Add streaming text
-    ...(streamingText ? [{
-      id: 'streaming-text',
-      type: 'assistant_text' as const,
-      content: streamingText,
-      timestamp: String(Date.now()),
-    }] : []),
+    // Historical messages in reverse order
+    ...(messages[id!] || []).slice().reverse(),
   ]
 
   // Status indicator text
@@ -436,6 +437,7 @@ export default function ChatScreen() {
             <FlatList
               ref={flatListRef}
               data={allMessages}
+              inverted
               keyExtractor={(item) => item.id}
               renderItem={({ item, index }) => (
                 <MessageBubble
@@ -444,7 +446,6 @@ export default function ChatScreen() {
                 />
               )}
               contentContainerStyle={styles.listContent}
-              onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
               refreshControl={
                 <RefreshControl
                   refreshing={isLoading}
@@ -458,6 +459,7 @@ export default function ChatScreen() {
             <ChatInput
               onSend={handleSend}
               placeholder="发送消息..."
+              chatStatus={chatStatus}
             />
           </>
         )}

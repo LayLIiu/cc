@@ -2,6 +2,7 @@ import React from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import { ChevronDown, ChevronRight } from '../markdown/Icons'
+import { ClaudeLogoWidget } from '../shared/ClaudeLogoWidget'
 
 type ThinkingBlockProps = {
   content?: string
@@ -28,23 +29,17 @@ export function ThinkingBlock({
         style={styles.header}
         activeOpacity={0.7}
       >
-        {expanded ? (
-          <ChevronDown size={12} color={colors.textTertiary} />
-        ) : (
-          <ChevronRight size={12} color={colors.textTertiary} />
-        )}
+        {/* 戴安娜 Logo 动画 */}
+        <View style={styles.logoWrapper}>
+          <ClaudeLogoWidget
+            size={16}
+            forceMode={isStreaming ? 'thinking' : 'idle'}
+          />
+        </View>
 
         <Text style={[styles.label, { color: colors.textTertiary }]}>
           thinking
         </Text>
-
-        {isStreaming && (
-          <View style={styles.streamingDots}>
-            <View style={[styles.dot, { backgroundColor: colors.textTertiary }]} />
-            <View style={[styles.dot, styles.dot2, { backgroundColor: colors.textTertiary }]} />
-            <View style={[styles.dot, styles.dot3, { backgroundColor: colors.textTertiary }]} />
-          </View>
-        )}
 
         {!expanded && preview && (
           <Text
@@ -78,13 +73,13 @@ export function ThinkingBlock({
 type ThinkingAnimationProps = {
   size?: number
   color?: string
+  mode?: 'idle' | 'thinking' | 'waiting'
 }
 
-export function ThinkingAnimation({ size = 40, color = '#6366f1' }: ThinkingAnimationProps) {
+export function ThinkingAnimation({ size = 40, color = '#D97757', mode = 'thinking' }: ThinkingAnimationProps) {
   return (
     <View style={[styles.animationContainer, { width: size, height: size }]}>
-      <View style={[styles.pulseRing, { borderColor: color }]} />
-      <View style={[styles.pulseCore, { backgroundColor: color }]} />
+      <ClaudeLogoWidget size={size} forceMode={mode} />
     </View>
   )
 }
@@ -101,28 +96,16 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     gap: 4,
   },
+  logoWrapper: {
+    width: 16,
+    height: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   label: {
     fontSize: 12,
     fontWeight: '500',
     fontStyle: 'italic',
-  },
-  streamingDots: {
-    flexDirection: 'row',
-    marginLeft: 4,
-  },
-  dot: {
-    width: 3,
-    height: 3,
-    borderRadius: 1.5,
-    opacity: 0.4,
-  },
-  dot2: {
-    marginLeft: 2,
-    opacity: 0.6,
-  },
-  dot3: {
-    marginLeft: 2,
-    opacity: 0.8,
   },
   preview: {
     flex: 1,
@@ -152,18 +135,5 @@ const styles = StyleSheet.create({
   animationContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  pulseRing: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
-    borderRadius: 100,
-    borderWidth: 2,
-    opacity: 0.3,
-  },
-  pulseCore: {
-    width: '40%',
-    height: '40%',
-    borderRadius: 100,
   },
 })

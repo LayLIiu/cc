@@ -7,13 +7,15 @@ import {
   StyleSheet,
 } from 'react-native'
 import { useTheme } from '@/utils/theme'
+import { ClaudeLogoWidget } from './shared/ClaudeLogoWidget'
 
 type ChatInputProps = {
   onSend: (message: string) => void
   placeholder?: string
+  chatStatus?: 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending'
 }
 
-export function ChatInput({ onSend, placeholder = '发送消息...' }: ChatInputProps) {
+export function ChatInput({ onSend, placeholder = '发送消息...', chatStatus = 'idle' }: ChatInputProps) {
   const { colors } = useTheme()
   const [text, setText] = useState('')
 
@@ -25,6 +27,14 @@ export function ChatInput({ onSend, placeholder = '发送消息...' }: ChatInput
 
   return (
     <View style={[styles.container, { borderTopColor: colors.border }]}>
+      {/* 戴安娜 Logo */}
+      <View style={styles.logoContainer}>
+        <ClaudeLogoWidget
+          size={36}
+          chatStatus={chatStatus}
+        />
+      </View>
+
       <TextInput
         style={[styles.input, { backgroundColor: colors.surface, color: colors.text }]}
         value={text}
@@ -50,6 +60,13 @@ const styles = StyleSheet.create({
     padding: 16,
     borderTopWidth: 1,
     gap: 10,
+    alignItems: 'flex-end',
+  },
+  logoContainer: {
+    width: 36,
+    height: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   input: {
     flex: 1,
