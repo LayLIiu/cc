@@ -233,6 +233,7 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+    paddingTop: 60,
   },
   section: {
     marginBottom: 24,

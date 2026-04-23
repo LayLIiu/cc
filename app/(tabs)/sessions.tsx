@@ -338,7 +338,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   header: {
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingTop: 60,
     paddingBottom: 0,
   },
   pageTitle: {
@@ -349,6 +350,7 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     paddingHorizontal: 16,
+    marginTop: 8,
   },
   newButton: {
     borderRadius: 12,
@@ -362,7 +364,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
-    paddingTop: 8,
+    paddingTop: 16,
   },
   section: {
     marginBottom: 24,

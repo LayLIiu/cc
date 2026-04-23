@@ -1,10 +1,12 @@
-import React, { useEffect } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
+import React, { useEffect, useMemo } from 'react'
+import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
   withTiming,
+  interpolate,
+  Easing,
 } from 'react-native-reanimated'
 import { useTheme } from '@/utils/theme'
 
@@ -14,6 +16,8 @@ type SegmentedTabProps = {
   onTabPress: (key: string) => void
 }
 
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity)
+
 export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps) {
   const { colors, isDark } = useTheme()
 
@@ -21,11 +25,25 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
   const translateX = useSharedValue(0)
   const scale = useSharedValue(1)
 
+  // Calculate tab width based on number of tabs
+  const tabWidth = 160 / tabs.length
+
+  // Pre-compute animated text styles for each tab (fixed: moved outside the loop to comply with React Hooks rules!)
+  const tabAnimatedStyles = useMemo(() => {
+    return tabs.map((tab) => {
+      const isActive = tab.key === activeTab
+      return {
+        opacity: isActive ? 1 : 0.6,
+        transform: [{ scale: isActive ? 1 : 0.95 }],
+      }
+    })
+  }, [tabs, activeTab])
+
   // Update animation when active tab changes
   useEffect(() => {
     const index = tabs.findIndex(t => t.key === activeTab)
     if (index !== -1) {
-      translateX.value = withSpring(index, {
+      translateX.value = withSpring(index * tabWidth, {
         damping: 20,
         stiffness: 300,
         mass: 0.8,
@@ -36,7 +54,7 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
   // Animated style for the sliding indicator
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: translateX.value * 100 + '%' as any },
+      { translateX: translateX.value },
       { scale: scale.value },
     ],
   }))
@@ -62,6 +80,7 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
         style={[
           styles.indicator,
           {
+            width: tabWidth,
             backgroundColor: colors.primary,
           },
           indicatorStyle,
@@ -72,17 +91,10 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
       {tabs.map((tab, index) => {
         const isActive = tab.key === activeTab
 
-        const animatedTextStyle = useAnimatedStyle(() => {
-          return {
-            opacity: withTiming(isActive ? 1 : 0.6, { duration: 150 }),
-            transform: [{ scale: withTiming(isActive ? 1 : 0.95, { duration: 150 }) }],
-          }
-        })
-
         return (
           <TouchableOpacity
             key={tab.key}
-            style={styles.tab}
+            style={[styles.tab, { width: tabWidth }]}
             onPress={() => handlePress(tab.key, index)}
             activeOpacity={0.7}
           >
@@ -92,7 +104,7 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
                 style={[
                   styles.label,
                   { color: isActive ? '#fff' : colors.text },
-                  animatedTextStyle,
+                  tabAnimatedStyles[index],
                 ]}
               >
                 {tab.label}
@@ -111,12 +123,12 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     padding: 4,
     marginHorizontal: 16,
+    marginVertical: 8,
     height: 44,
   },
   indicator: {
     position: 'absolute',
     height: 36,
-    width: '50%',
     borderRadius: 20,
     top: 4,
     left: 4,
@@ -127,7 +139,6 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   tab: {
-    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     height: 36,
