@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo } from 'react'
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
+import React, { useEffect, useMemo, useState } from 'react'
+import { View, Text, StyleSheet, TouchableOpacity, LayoutChangeEvent } from 'react-native'
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -15,13 +15,14 @@ type SegmentedTabProps = {
 
 export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps) {
   const { colors, isDark } = useTheme()
+  const [containerWidth, setContainerWidth] = useState(0)
 
   // Animation value for sliding indicator
   const translateX = useSharedValue(0)
   const scale = useSharedValue(1)
 
-  // Calculate tab width based on number of tabs
-  const tabWidth = 160 / tabs.length
+  // 计算每个tab的宽度
+  const tabWidth = containerWidth > 0 ? (containerWidth - 8) / tabs.length : 0 // 8 = padding
 
   // Pre-compute animated text styles for each tab
   const tabAnimatedStyles = useMemo(() => {
@@ -37,14 +38,14 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
   // Update animation when active tab changes
   useEffect(() => {
     const index = tabs.findIndex(t => t.key === activeTab)
-    if (index !== -1) {
+    if (index !== -1 && tabWidth > 0) {
       translateX.value = withSpring(index * tabWidth, {
         damping: 20,
         stiffness: 300,
         mass: 0.8,
       })
     }
-  }, [activeTab, tabs.length])
+  }, [activeTab, tabs.length, tabWidth])
 
   // Animated style for the sliding indicator
   const indicatorStyle = useAnimatedStyle(() => ({
@@ -62,33 +63,43 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
     onTabPress(key)
   }
 
-  return (
-    <View style={[
-      styles.container,
-      {
-        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
-      }
-    ]}>
-      {/* Sliding indicator */}
-      <Animated.View
-        style={[
-          styles.indicator,
-          {
-            width: tabWidth,
-            backgroundColor: colors.primary,
-          },
-          indicatorStyle,
-        ]}
-      />
+  // 获取容器宽度
+  const handleLayout = (event: LayoutChangeEvent) => {
+    setContainerWidth(event.nativeEvent.layout.width)
+  }
 
-      {/* Tab buttons */}
+  return (
+    <View
+      style={[
+        styles.container,
+        {
+          backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+        }
+      ]}
+      onLayout={handleLayout}
+    >
+      {/* Sliding indicator */}
+      {tabWidth > 0 && (
+        <Animated.View
+          style={[
+            styles.indicator,
+            {
+              width: tabWidth,
+              backgroundColor: colors.primary,
+            },
+            indicatorStyle,
+          ]}
+        />
+      )}
+
+      {/* Tab buttons - 平分宽度 */}
       {tabs.map((tab, index) => {
         const isActive = tab.key === activeTab
 
         return (
           <TouchableOpacity
             key={tab.key}
-            style={[styles.tab, { width: tabWidth }]}
+            style={styles.tab}
             onPress={() => handlePress(tab.key)}
             activeOpacity={0.7}
           >
@@ -114,16 +125,16 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    borderRadius: 25,
+    borderRadius: 28,
     padding: 4,
     marginHorizontal: 16,
     marginVertical: 8,
-    height: 44,
+    height: 52,
   },
   indicator: {
     position: 'absolute',
-    height: 36,
-    borderRadius: 20,
+    height: 44,
+    borderRadius: 24,
     top: 4,
     left: 4,
     shadowColor: '#6366f1',
@@ -133,21 +144,22 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   tab: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    height: 36,
+    height: 44,
     zIndex: 1,
   },
   tabContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
   icon: {
-    fontSize: 16,
+    fontSize: 18,
   },
   label: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
   },
 })

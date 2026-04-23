@@ -123,6 +123,11 @@ export default function SettingsScreen() {
       style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={styles.content}
     >
+      {/* Header Title */}
+      <View style={styles.header}>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Claude Code</Text>
+      </View>
+
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
           账户
@@ -284,8 +289,9 @@ export default function SettingsScreen() {
               keyboardType="url"
             />
             <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
-              输入本地地址 (如 http://192.168.1.x:3456){'\n'}
-              或 Cloudflare Tunnel 地址
+              输入桌面端显示的服务器地址{'\n'}
+              例如：http://192.168.1.100:3456{'\n'}
+              或公网 Tunnel 地址
             </Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -389,6 +395,15 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+  },
+  header: {
+    paddingTop: 44,
+    paddingBottom: 8,
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '700',
   },
   section: {
     marginBottom: 24,

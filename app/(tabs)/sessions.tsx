@@ -158,19 +158,17 @@ export default function SessionsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
+      {/* Header with title and add button */}
       <View style={styles.header}>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>Claude Code</Text>
-      </View>
-
-      {/* New Session Button */}
-      <View style={styles.headerRow}>
         <TouchableOpacity
-          style={[styles.newButton, { backgroundColor: colors.primary }]}
+          style={[styles.addButton, { backgroundColor: colors.primary }]}
           onPress={handleNewSession}
+          activeOpacity={0.7}
         >
-          <Text style={styles.newButtonText}>+ 新建对话</Text>
+          <Text style={styles.addButtonText}>+</Text>
         </TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Claude Code</Text>
+        <View style={styles.headerRight} />
       </View>
 
       <FlatList
@@ -205,7 +203,7 @@ export default function SessionsScreen() {
               暂无对话
             </Text>
             <Text style={[styles.emptySubtitle, { color: colors.textTertiary }]}>
-              点击上方"新建对话"开始
+              点击左上角 + 开始新对话
             </Text>
           </View>
         }
@@ -328,29 +326,34 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: 60,
-    paddingBottom: 0,
+    paddingBottom: 12,
   },
   headerTitle: {
     fontSize: 28,
     fontWeight: '700',
-    marginBottom: 12,
+    flex: 1,
     textAlign: 'center',
   },
-  headerRow: {
-    paddingHorizontal: 16,
-    marginTop: 8,
+  headerRight: {
+    width: 44,
   },
-  newButton: {
-    borderRadius: 12,
-    padding: 14,
+  addButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  newButtonText: {
+  addButtonText: {
     color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 28,
+    fontWeight: '300',
+    marginTop: -2,
   },
   listContent: {
     padding: 16,

@@ -1,5 +1,6 @@
-import React, { memo } from 'react'
-import { View, Text, StyleSheet } from 'react-native'
+import React, { memo, useState, useRef } from 'react'
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native'
+import * as Clipboard from 'expo-clipboard'
 import { useTheme } from '@/utils/theme'
 import type { Message } from '@/types/session'
 import { MarkdownRenderer } from './markdown/MarkdownRenderer'
@@ -14,14 +15,81 @@ type MessageBubbleProps = {
 // 使用 memo 避免不必要的重新渲染
 const MessageBubbleComponent = ({ message, isLast }: MessageBubbleProps) => {
   const { colors } = useTheme()
+  const [showMenu, setShowMenu] = useState(false)
+  const [copySuccess, setCopySuccess] = useState(false)
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // 复制消息内容
+  const handleCopy = async () => {
+    try {
+      await Clipboard.setStringAsync(message.content)
+      setCopySuccess(true)
+      // 显示"已复制"后自动消失
+      setTimeout(() => {
+        setShowMenu(false)
+        setCopySuccess(false)
+      }, 800)
+    } catch (error) {
+      console.error('Copy failed:', error)
+    }
+  }
+
+  // 长按显示菜单
+  const handleLongPress = () => {
+    setShowMenu(true)
+    setCopySuccess(false)
+    // 3秒后自动隐藏
+    if (hideTimeoutRef.current) {
+      clearTimeout(hideTimeoutRef.current)
+    }
+    hideTimeoutRef.current = setTimeout(() => {
+      setShowMenu(false)
+      setCopySuccess(false)
+    }, 3000)
+  }
+
+  // 点击气泡
+  const handlePressBubble = () => {
+    if (showMenu) {
+      setShowMenu(false)
+      setCopySuccess(false)
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current)
+        hideTimeoutRef.current = null
+      }
+    }
+  }
+
+  // 是否是用户消息
+  const isUserMessage = message.type === 'user_text'
 
   // User message - right side, primary color
   if (message.type === 'user_text') {
     return (
       <View style={[styles.userWrapper, isLast && styles.lastMessage]}>
-        <View style={[styles.userBubble, { backgroundColor: colors.primary }]}>
-          <Text style={styles.userText}>{message.content}</Text>
-        </View>
+        {/* 复制菜单 - 放在气泡上面的一个独立行 */}
+        {showMenu && (
+          <View style={styles.menuRowRight}>
+            <TouchableOpacity
+              style={styles.menuBubble}
+              onPress={handleCopy}
+              activeOpacity={0.7}
+            >
+              <Text style={copySuccess ? styles.menuTextSuccess : styles.menuText}>
+                {copySuccess ? '已复制' : '复制'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        <TouchableOpacity
+          style={[styles.userBubble, { backgroundColor: colors.primary }]}
+          onLongPress={handleLongPress}
+          onPress={handlePressBubble}
+          activeOpacity={0.8}
+          delayLongPress={200}
+        >
+          <Text style={styles.userText} selectable>{message.content}</Text>
+        </TouchableOpacity>
       </View>
     )
   }
@@ -30,9 +98,29 @@ const MessageBubbleComponent = ({ message, isLast }: MessageBubbleProps) => {
   if (message.type === 'assistant_text') {
     return (
       <View style={[styles.assistantWrapper, isLast && styles.lastMessage]}>
-        <View style={[styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        {/* 复制菜单 - 放在气泡上面的一个独立行 */}
+        {showMenu && (
+          <View style={styles.menuRowLeft}>
+            <TouchableOpacity
+              style={styles.menuBubble}
+              onPress={handleCopy}
+              activeOpacity={0.7}
+            >
+              <Text style={copySuccess ? styles.menuTextSuccess : styles.menuText}>
+                {copySuccess ? '已复制' : '复制'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+        <TouchableOpacity
+          style={[styles.assistantBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          onLongPress={handleLongPress}
+          onPress={handlePressBubble}
+          activeOpacity={0.8}
+          delayLongPress={200}
+        >
           <MarkdownRenderer content={message.content} />
-        </View>
+        </TouchableOpacity>
       </View>
     )
   }
@@ -86,16 +174,51 @@ export const MessageBubble = memo(MessageBubbleComponent, (prevProps, nextProps)
 })
 
 const styles = StyleSheet.create({
+  // 消息容器
   userWrapper: {
     alignItems: 'flex-end',
     marginBottom: 12,
     paddingHorizontal: 8,
   },
+  assistantWrapper: {
+    alignItems: 'flex-start',
+    marginBottom: 12,
+    paddingHorizontal: 8,
+    width: '100%',
+  },
   lastMessage: {
     marginBottom: 0,
   },
+
+  // 菜单行 - 使用 flex 布局放在气泡上方
+  menuRowLeft: {
+    marginBottom: 6,
+    paddingLeft: 8,
+  },
+  menuRowRight: {
+    marginBottom: 6,
+    paddingRight: 8,
+  },
+  menuBubble: {
+    backgroundColor: '#4a4a4a',
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 4,
+  },
+  menuText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  menuTextSuccess: {
+    color: '#4ade80',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+
+  // 消息气泡
   userBubble: {
-    maxWidth: '92%',
+    maxWidth: '75%',
     minWidth: 50,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -108,14 +231,8 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 
-  assistantWrapper: {
-    alignItems: 'flex-start',
-    marginBottom: 12,
-    paddingHorizontal: 8,
-    width: '100%',
-  },
   assistantBubble: {
-    maxWidth: '92%',
+    maxWidth: '75%',
     minWidth: 50,
     paddingHorizontal: 14,
     paddingVertical: 10,

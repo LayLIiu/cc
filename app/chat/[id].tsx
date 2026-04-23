@@ -571,7 +571,7 @@ export default function ChatScreen() {
   // 自定义标题组件（包含标题和状态）
   const HeaderTitle = useCallback(() => (
     <View style={styles.headerContent}>
-      <Text style={[styles.headerTitle, { color: colors.text }]}>
+      <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
         {session?.title || '对话'}
       </Text>
       <View style={styles.statusIndicator}>
