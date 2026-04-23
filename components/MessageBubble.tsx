@@ -104,6 +104,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderBottomLeftRadius: 8,
     borderWidth: 1,
+    overflow: 'hidden',
   },
 
   toolWrapper: {

@@ -232,7 +232,7 @@ function CodeBlock({
           />
         </TouchableOpacity>
       </View>
-      <ScrollView horizontal style={styles.codeScroll}>
+      <ScrollView horizontal style={styles.codeScroll} showsHorizontalScrollIndicator={false}>
         <Text style={styles.codeText}>
           {code}
         </Text>
@@ -413,13 +413,16 @@ const styles = StyleSheet.create({
   },
   codeScroll: {
     paddingHorizontal: 8,
+    // 防止 ScrollView 在 Android 上被撑开到不必要的高度
+    flexGrow: 0,
   },
   codeText: {
     fontFamily: Platform.select({ ios: 'Courier', android: 'monospace' }),
     fontSize: 13,
     lineHeight: 20,
     color: '#d4d4d4',
-    padding: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
   copyIndicator: {
     position: 'absolute',
