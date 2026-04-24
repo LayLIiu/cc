@@ -53,7 +53,9 @@ export default function ProvidersScreen() {
       const info = await apiClient.getNetworkInfo()
       setNetworkInfo(info)
     } catch (err) {
+      // API 不存在或其他错误，设置默认值
       console.log('Failed to load network info:', err)
+      setNetworkInfo({ lanUrl: '', tunnelUrl: '', tunnelEnabled: false })
     } finally {
       setLoadingNetworkInfo(false)
     }
@@ -68,7 +70,12 @@ export default function ProvidersScreen() {
       setPairingCodeExpiry(result.expiresAt)
       Alert.alert('配对码已生成', `配对码: ${result.pairingCode}\n请在桌面端输入此配对码进行连接`)
     } catch (err) {
-      Alert.alert('生成失败', err instanceof Error ? err.message : '生成配对码失败')
+      const errorMsg = err instanceof Error ? err.message : '生成配对码失败'
+      if (errorMsg.includes('暂不支持')) {
+        Alert.alert('功能暂不可用', '桌面端版本可能需要更新以支持此功能')
+      } else {
+        Alert.alert('生成失败', errorMsg)
+      }
     } finally {
       setLoadingPairingCode(false)
     }
@@ -87,7 +94,12 @@ export default function ProvidersScreen() {
         )
       }
     } catch (err) {
-      Alert.alert('操作失败', err instanceof Error ? err.message : '设置隧道失败')
+      const errorMsg = err instanceof Error ? err.message : '设置隧道失败'
+      if (errorMsg.includes('暂不支持')) {
+        Alert.alert('功能暂不可用', '桌面端版本可能需要更新以支持此功能')
+      } else {
+        Alert.alert('操作失败', errorMsg)
+      }
     } finally {
       setEnablingTunnel(false)
     }
@@ -259,7 +271,7 @@ export default function ProvidersScreen() {
                 <ActivityIndicator size="small" color={colors.textTertiary} />
               ) : (
                 <Text style={[styles.settingValue, { color: colors.textSecondary }]} numberOfLines={1}>
-                  {networkInfo?.lanUrl || '未连接'}
+                  {serverUrl ? `${serverUrl} (当前连接)` : '未设置'}
                 </Text>
               )}
             </View>

@@ -88,7 +88,7 @@ android {
 
     namespace 'com.ccha.mobile'
     defaultConfig {
-        applicationId 'com.ccha.mobile'
+        applicationId 'com.ccha.cc'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

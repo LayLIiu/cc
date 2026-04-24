@@ -314,6 +314,7 @@ export function useGlobalStatus() {
   const unsubscribesRef = useRef<Map<string, () => void>>(new Map())
   const prevServerUrlRef = useRef<string>('')
   const lastSubscribeTimeRef = useRef<number>(0)
+  const idleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   // 检查并清除过期的 completed 状态（1 分钟后自动变为 idle）
   const checkAndClearCompletedStatus = useCallback(() => {
@@ -369,13 +370,62 @@ export function useGlobalStatus() {
           // 使用共享管理器订阅状态消息，保存取消订阅函数
           const unsubscribe = wsManager.onMessage(session.id, (msg) => {
             console.log(`[GlobalStatus] Received message for ${session.id}:`, msg.type, msg.state)
+
             if (msg.type === 'status' && msg.state) {
-              // 只有当状态确实改变时才更新，避免频繁更新
-              updateSessionStatus(session.id, msg.state as any)
+              const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
+              const newState = msg.state
+
+              // 如果收到工作状态，立即更新并清除待处理的 idle 定时器
+              if (workingStates.includes(newState)) {
+                const timer = idleTimersRef.current.get(session.id)
+                if (timer) {
+                  clearTimeout(timer)
+                  idleTimersRef.current.delete(session.id)
+                }
+                updateSessionStatus(session.id, newState as any)
+              } else if (newState === 'idle') {
+                // 如果当前是工作状态，延迟 2 秒再切换到 idle
+                const currentStatuses = useSessionStore.getState().sessionStatuses
+                const currentStatus = currentStatuses[session.id]
+                if (workingStates.includes(currentStatus)) {
+                  // 清除之前的定时器
+                  const existingTimer = idleTimersRef.current.get(session.id)
+                  if (existingTimer) {
+                    clearTimeout(existingTimer)
+                  }
+                  // 设置新的延迟更新
+                  const timer = setTimeout(() => {
+                    updateSessionStatus(session.id, 'idle')
+                    idleTimersRef.current.delete(session.id)
+                  }, 2000)
+                  idleTimersRef.current.set(session.id, timer)
+                } else {
+                  // 当前不是工作状态，直接更新
+                  updateSessionStatus(session.id, 'idle')
+                }
+              } else if (newState === 'completed') {
+                // completed 状态直接更新
+                const timer = idleTimersRef.current.get(session.id)
+                if (timer) {
+                  clearTimeout(timer)
+                  idleTimersRef.current.delete(session.id)
+                }
+                updateSessionStatus(session.id, 'completed')
+              }
             } else if (msg.type === 'permission_request') {
+              const timer = idleTimersRef.current.get(session.id)
+              if (timer) {
+                clearTimeout(timer)
+                idleTimersRef.current.delete(session.id)
+              }
               updateSessionStatus(session.id, 'permission_pending')
             } else if (msg.type === 'message_complete') {
               // 消息完成时设置为 completed 状态，1 分钟后自动变为 idle
+              const timer = idleTimersRef.current.get(session.id)
+              if (timer) {
+                clearTimeout(timer)
+                idleTimersRef.current.delete(session.id)
+              }
               updateSessionStatus(session.id, 'completed')
             }
           })
@@ -413,6 +463,11 @@ export function useGlobalStatus() {
     return () => {
       clearInterval(interval)
       clearInterval(statusCleanupInterval)
+      // 清除所有 idle 定时器
+      for (const timer of idleTimersRef.current.values()) {
+        clearTimeout(timer)
+      }
+      idleTimersRef.current.clear()
       // 取消所有 WebSocket 消息订阅，防止处理器累积
       for (const [sid, unsub] of unsubscribesRef.current) {
         unsub()

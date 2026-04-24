@@ -78,7 +78,7 @@ export default function ChatScreen() {
   // Streaming state
   const [streamingText, setStreamingText] = useState('')
   const [streamingThinking, setStreamingThinking] = useState('')
-  const [chatStatus, setChatStatus] = useState<'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending'>('idle')
+  const [chatStatus, setChatStatus] = useState<'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending' | 'completed'>('idle')
   const [statusVerb, setStatusVerb] = useState('')
   const [permissionRequest, setPermissionRequest] = useState<{
     requestId: string
@@ -110,6 +110,10 @@ export default function ChatScreen() {
         clearTimeout(statusCheckTimeoutRef.current)
         statusCheckTimeoutRef.current = null
       }
+      if (idleStatusTimerRef.current) {
+        clearTimeout(idleStatusTimerRef.current)
+        idleStatusTimerRef.current = null
+      }
     }
   }, [id, getInitialStatus, updateSessionStatus, status])
 
@@ -118,6 +122,8 @@ export default function ChatScreen() {
   const addedMessageContents = useRef(new Set<string>()) // 使用内容去重
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const statusCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastUserSendTimeRef = useRef<number>(0) // 记录最后一次用户发送消息的时间
+  const idleStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // idle 状态延迟更新定时器
 
   // 状态点闪烁动画
   const dotOpacity = useRef(new Animated.Value(1)).current
@@ -200,6 +206,19 @@ export default function ChatScreen() {
           clearTimeout(statusCheckTimeoutRef.current)
           statusCheckTimeoutRef.current = null
         }
+        // 清除待处理的 idle 更新，确保状态为工作状态
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
+        // 如果当前不是工作状态，设置为 streaming
+        const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
+        if (!workingStates.includes(chatStatus)) {
+          setChatStatus('streaming')
+          setStatusVerb('')
+          if (id) updateSessionStatus(id, 'streaming')
+        }
+
         if (lastMessage.blockType === 'text') {
           streamState.inTextBlock = true
           streamState.textBuffer = ''
@@ -214,6 +233,11 @@ export default function ChatScreen() {
           clearTimeout(statusCheckTimeoutRef.current)
           statusCheckTimeoutRef.current = null
         }
+        // 清除待处理的 idle 更新
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
         if (lastMessage.text) {
           streamState.textBuffer += lastMessage.text
           setStreamingText(streamState.textBuffer)
@@ -227,6 +251,16 @@ export default function ChatScreen() {
           clearTimeout(statusCheckTimeoutRef.current)
           statusCheckTimeoutRef.current = null
         }
+        // 清除待处理的 idle 更新，确保状态为工作状态
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
+        // 设置为 thinking 状态
+        setChatStatus('thinking')
+        setStatusVerb('Thinking')
+        if (id) updateSessionStatus(id, 'thinking')
+
         if (!streamState.inThinkingBlock) {
           streamState.inThinkingBlock = true
           streamState.thinkingBuffer = ''
@@ -237,6 +271,15 @@ export default function ChatScreen() {
       }
 
       case 'tool_use_complete': {
+        // 清除待处理的 idle 更新
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
+        // 设置为 tool_executing 状态
+        setChatStatus('tool_executing')
+        if (id) updateSessionStatus(id, 'tool_executing')
+
         const toolUseId = lastMessage.toolUseId || `tool-${Date.now()}`
         streamState.pendingToolUseIds.add(toolUseId)
 
@@ -305,6 +348,10 @@ export default function ChatScreen() {
           clearTimeout(statusCheckTimeoutRef.current)
           statusCheckTimeoutRef.current = null
         }
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
         if (streamState.textBuffer) {
           const textMsg: Message = {
             id: `ws-text-${Date.now()}`,
@@ -330,8 +377,10 @@ export default function ChatScreen() {
         streamState.inThinkingBlock = false
         setStreamingText('')
         setStreamingThinking('')
-        setChatStatus('idle')
+        setChatStatus('completed')
         setStatusVerb('')
+        // 更新全局状态，让会话列表也能看到
+        if (id) updateSessionStatus(id, 'completed')
         break
       }
 
@@ -346,14 +395,59 @@ export default function ChatScreen() {
           updateSessionStatus(lastMessage.sessionId, lastMessage.state as any)
           // 如果是当前会话，也更新本地状态
           if (lastMessage.sessionId === id) {
-            setChatStatus(lastMessage.state as any)
+            const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
+            const newState = lastMessage.state
+
+            // 如果收到工作状态，立即更新并清除任何待处理的 idle 定时器
+            if (workingStates.includes(newState)) {
+              // 清除待处理的 idle 更新
+              if (idleStatusTimerRef.current) {
+                clearTimeout(idleStatusTimerRef.current)
+                idleStatusTimerRef.current = null
+              }
+              setChatStatus(newState as any)
+              if (lastMessage.verb) {
+                setStatusVerb(lastMessage.verb)
+              }
+            } else if (newState === 'idle') {
+              // 如果在用户发送消息后的 2 秒内收到 idle 状态，忽略它
+              const timeSinceSend = Date.now() - lastUserSendTimeRef.current
+              if (timeSinceSend < 2000) {
+                console.log('[Chat] Ignoring idle status shortly after user send')
+              } else if (workingStates.includes(chatStatus)) {
+                // 当前是工作状态，延迟 2 秒再切换到 idle
+                // 这样可以避免短暂的 idle 状态导致闪烁
+                console.log('[Chat] Delaying idle status update')
+                if (idleStatusTimerRef.current) {
+                  clearTimeout(idleStatusTimerRef.current)
+                }
+                idleStatusTimerRef.current = setTimeout(() => {
+                  // 2 秒后如果还是 idle 状态，才更新
+                  setChatStatus('idle')
+                  setStatusVerb('')
+                  idleStatusTimerRef.current = null
+                }, 2000)
+              } else {
+                // 当前不是工作状态，直接更新
+                setChatStatus('idle')
+                setStatusVerb('')
+              }
+            } else if (newState === 'completed') {
+              // completed 状态直接更新
+              if (idleStatusTimerRef.current) {
+                clearTimeout(idleStatusTimerRef.current)
+                idleStatusTimerRef.current = null
+              }
+              setChatStatus('completed')
+              setStatusVerb('')
+            }
           }
         } else if (lastMessage.state) {
           // 兼容旧格式：没有 sessionId，更新当前会话
           setChatStatus(lastMessage.state as any)
-        }
-        if (lastMessage.verb) {
-          setStatusVerb(lastMessage.verb)
+          if (lastMessage.verb) {
+            setStatusVerb(lastMessage.verb)
+          }
         }
         break
       }
@@ -376,6 +470,11 @@ export default function ChatScreen() {
         break
 
       case 'permission_request': {
+        // 清除待处理的 idle 更新
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
         setPermissionRequest({
           requestId: lastMessage.requestId,
           toolName: lastMessage.toolName || 'Unknown',
@@ -387,6 +486,20 @@ export default function ChatScreen() {
         break
       }
 
+      case 'message_complete':
+        // 消息完成：设置为 completed
+        if (statusCheckTimeoutRef.current) {
+          clearTimeout(statusCheckTimeoutRef.current)
+          statusCheckTimeoutRef.current = null
+        }
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
+        setChatStatus('completed')
+        setStatusVerb('')
+        break
+
       case 'session_title_updated': {
         if (lastMessage.sessionId && lastMessage.title) {
           updateSessionTitle(lastMessage.sessionId, lastMessage.title)
@@ -395,6 +508,10 @@ export default function ChatScreen() {
       }
 
       case 'error':
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
         streamState.textBuffer = ''
         streamState.thinkingBuffer = ''
         streamState.inTextBlock = false
@@ -402,11 +519,12 @@ export default function ChatScreen() {
         setStreamingText('')
         setStreamingThinking('')
         setChatStatus('idle')
+        setStatusVerb('')
         break
     }
 
     clearLastMessage()
-  }, [lastMessage, id, addMessage, updateMessage, clearLastMessage, updateSessionTitle])
+  }, [lastMessage, id, addMessage, updateMessage, clearLastMessage, updateSessionTitle, chatStatus, updateSessionStatus])
 
   const handleSend = useCallback((content: string) => {
     if (!content.trim()) return
@@ -433,8 +551,11 @@ export default function ChatScreen() {
     streamState.inThinkingBlock = false
     setStreamingText('')
     setStreamingThinking('')
+
+    // Set thinking status and record send time
     setChatStatus('thinking')
     setStatusVerb('Thinking')
+    lastUserSendTimeRef.current = Date.now()
 
     // Send to server
     send({ type: 'user_message', content: trimmedContent })
@@ -584,22 +705,29 @@ export default function ChatScreen() {
   // 自定义标题组件（包含标题和状态）
   const HeaderTitle = useCallback(() => (
     <View style={styles.headerContent}>
-      <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
-        {session?.title || '对话'}
-      </Text>
+      {/* 标题 - 限制最大宽度，超出省略 */}
+      <View style={styles.titleContainer}>
+        <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
+          {session?.title || '对话'}
+        </Text>
+      </View>
+      {/* 状态行 - 固定宽度居中 */}
       <View style={styles.statusRow}>
         <View style={styles.statusSpacer} />
-        {chatStatus !== 'idle' && (
+        {chatStatus !== 'idle' && chatStatus !== 'completed' && (
           <Animated.View style={[
             styles.statusDot,
             { backgroundColor: '#22c55e', opacity: dotOpacity }
           ]} />
         )}
+        {chatStatus === 'completed' && (
+          <View style={[styles.statusDot, { backgroundColor: '#22c55e' }]} />
+        )}
         <Text style={[
           styles.statusText,
-          { color: chatStatus !== 'idle' ? '#22c55e' : colors.textTertiary }
+          { color: chatStatus === 'completed' ? '#22c55e' : chatStatus !== 'idle' ? '#22c55e' : colors.textTertiary }
         ]}>
-          {chatStatus !== 'idle' ? '工作中' : '等待中'}
+          {chatStatus === 'completed' ? '已完成' : chatStatus !== 'idle' ? '工作中' : '等待中'}
         </Text>
         <View style={styles.statusSpacer} />
       </View>
@@ -636,6 +764,11 @@ const styles = StyleSheet.create({
   headerContent: {
     alignItems: 'center',
     justifyContent: 'center',
+    minWidth: 200,
+  },
+  titleContainer: {
+    maxWidth: 200,
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 17,

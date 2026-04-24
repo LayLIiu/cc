@@ -429,6 +429,9 @@ class ApiClient {
     const response = await this.safeFetch(`${this.getBaseUrl()}/api/pairing-code`, {
       method: 'POST',
     })
+    if (response.status === 404) {
+      throw new Error('服务器暂不支持配对码功能')
+    }
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
       throw new Error(error.message || '获取配对码失败')
@@ -438,6 +441,10 @@ class ApiClient {
 
   async getNetworkInfo(): Promise<{ lanUrl: string; tunnelUrl: string; tunnelEnabled: boolean }> {
     const response = await this.safeFetch(`${this.getBaseUrl()}/api/network-info`)
+    if (response.status === 404) {
+      // API 不存在，返回默认值
+      return { lanUrl: '', tunnelUrl: '', tunnelEnabled: false }
+    }
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
       throw new Error(error.message || '获取网络信息失败')
@@ -450,6 +457,9 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     })
+    if (response.status === 404) {
+      throw new Error('服务器暂不支持公网隧道功能')
+    }
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
       throw new Error(error.message || '设置隧道失败')

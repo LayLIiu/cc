@@ -2,7 +2,6 @@ import React, { useState, memo, useMemo } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, Animated, Modal, TextInput } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import type { Session, SessionStatus } from '@/types/session'
-import { ClaudeLogoWidget } from './shared/ClaudeLogoWidget'
 import PixelMascot from './shared/PixelMascot'
 
 type SessionItemProps = {
@@ -160,18 +159,15 @@ const SessionItemComponent = ({ session, onPress, onDelete, onRename, isActive, 
         >
           {/* 状态图标 */}
           <View style={styles.iconContainer}>
-            {status !== 'idle' ? (
-              <ClaudeLogoWidget
-                size={28}
-                forceMode="thinking"
-              />
-            ) : (
-              <PixelMascot
-                size={28}
-                status="idle"
-                color={mascotColor}
-              />
-            )}
+            <PixelMascot
+              size={28}
+              status={
+                status === 'completed' ? 'completed' :
+                status === 'permission_pending' ? 'waitingApproval' :
+                status !== 'idle' ? 'processing' : 'idle'
+              }
+              color={mascotColor}
+            />
           </View>
 
           <View style={styles.content}>
@@ -183,7 +179,17 @@ const SessionItemComponent = ({ session, onPress, onDelete, onRename, isActive, 
                 {session.title || '新对话'}
               </Text>
               {/* 状态标签 */}
-              {status !== 'idle' && (
+              {status === 'completed' && (
+                <View style={[styles.statusBadge, { backgroundColor: '#22c55e20' }]}>
+                  <Text style={[styles.statusText, { color: '#22c55e' }]}>已完成</Text>
+                </View>
+              )}
+              {status === 'permission_pending' && (
+                <View style={[styles.statusBadge, { backgroundColor: '#FF3D0020' }]}>
+                  <Text style={[styles.statusText, { color: '#FF3D00' }]}>等待权限</Text>
+                </View>
+              )}
+              {status !== 'idle' && status !== 'permission_pending' && status !== 'completed' && (
                 <View style={[styles.statusBadge, { backgroundColor: colors.primary + '20' }]}>
                   <Text style={[styles.statusText, { color: colors.primary }]}>工作中</Text>
                 </View>

@@ -7,8 +7,8 @@ import { useTheme } from '@/utils/theme'
 import AnimatedModal from '@/components/AnimatedModal'
 
 // 版本信息 - 每次修改后更新
-const APP_VERSION = '1.1.0'
-const BUILD_TIME = '2026-04-23 09:35'
+const APP_VERSION = '1.2.3'
+const BUILD_TIME = '2026-04-24 17:00'
 
 const THEME_OPTIONS: { mode: ThemeMode; label: string; icon: string }[] = [
   { mode: 'light', label: '浅色', icon: '☀️' },
@@ -358,10 +358,13 @@ export default function SettingsScreen() {
           关于
         </Text>
         <View style={[styles.card, { backgroundColor: colors.surface }]}>
-          <View style={styles.row}>
+          <TouchableOpacity style={styles.row} onPress={() => router.push('/changelog')}>
             <Text style={[styles.label, { color: colors.text }]}>版本</Text>
-            <Text style={[styles.value, { color: colors.textSecondary }]}>{APP_VERSION}</Text>
-          </View>
+            <View style={styles.versionValue}>
+              <Text style={[styles.value, { color: colors.textSecondary }]}>{APP_VERSION}</Text>
+              <Text style={[styles.changelogHint, { color: colors.primary }]}>更新日志</Text>
+            </View>
+          </TouchableOpacity>
           <View style={[styles.row, { borderTopColor: colors.border, borderTopWidth: 1, marginTop: 12, paddingTop: 12 }]}>
             <Text style={[styles.label, { color: colors.text }]}>构建时间</Text>
             <Text style={[styles.value, { color: colors.textSecondary }]}>{BUILD_TIME}</Text>
@@ -759,5 +762,17 @@ const styles = StyleSheet.create({
   themeCheck: {
     fontSize: 18,
     fontWeight: '600',
+  },
+  // Version row styles
+  versionValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  changelogHint: {
+    fontSize: 12,
+    fontWeight: '500',
   },
 })

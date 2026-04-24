@@ -1,5 +1,5 @@
 import { Tabs, usePathname, useRouter } from 'expo-router'
-import { View, StyleSheet } from 'react-native'
+import { View, StyleSheet, Keyboard } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import { SegmentedTab, TabItem } from '@/components/SegmentedTab'
 import { MascotWidget } from '@/components/shared/MascotWidget'
@@ -7,7 +7,7 @@ import { ProviderMascotWidget } from '@/components/shared/ProviderMascot'
 import { SettingsMascotWidget } from '@/components/shared/SettingsMascot'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useGlobalStatus } from '@/hooks/useSharedWebSocket'
-import { useMemo } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export default function TabsLayout() {
@@ -16,9 +16,25 @@ export default function TabsLayout() {
   const router = useRouter()
   const sessionStatuses = useSessionStore((state) => state.sessionStatuses)
   const insets = useSafeAreaInsets()
+  const [keyboardVisible, setKeyboardVisible] = useState(false)
 
   // 全局状态监听
   useGlobalStatus()
+
+  // 监听键盘状态
+  useEffect(() => {
+    const showSubscription = Keyboard.addListener('keyboardWillShow', () => {
+      setKeyboardVisible(true)
+    })
+    const hideSubscription = Keyboard.addListener('keyboardWillHide', () => {
+      setKeyboardVisible(false)
+    })
+
+    return () => {
+      showSubscription.remove()
+      hideSubscription.remove()
+    }
+  }, [])
 
   // 计算整体会话状态
   const globalStatus = useMemo(() => {
@@ -35,7 +51,7 @@ export default function TabsLayout() {
       return 'processing'
     }
 
-    // 有任何对话已完成（1 分钟内）→ 显示已完成
+    // 有任何对话已完成 → completed
     if (statuses.includes('completed')) {
       return 'completed'
     }
@@ -66,8 +82,11 @@ export default function TabsLayout() {
     router.push(`/(tabs)/${key}` as any)
   }
 
+  // 计算 tab 栏底部位置 - 固定值，不随内容变化
+  const tabBarBottom = keyboardVisible ? -100 : (insets.bottom + 8)
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.background }]}>
+    <View style={styles.container}>
       {/* Page content */}
       <Tabs
         screenOptions={{
@@ -85,12 +104,13 @@ export default function TabsLayout() {
         style={[
           styles.tabBarContainer,
           {
-            bottom: insets.bottom || 20,
+            bottom: tabBarBottom,
             backgroundColor: isDark
               ? 'rgba(30, 30, 30, 0.85)'
               : 'rgba(255, 255, 255, 0.85)',
           },
         ]}
+        pointerEvents={keyboardVisible ? 'none' : 'auto'}
       >
         <SegmentedTab
           tabs={tabs}

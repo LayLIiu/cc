@@ -165,7 +165,7 @@ const ClaudeLogo: React.FC<ClaudeLogoProps> = ({
 
     if (mode === 'thinking') {
       progress.value = withRepeat(
-        withTiming(1, { duration: 2000, easing: Easing.linear }),
+        withTiming(1, { duration: 800, easing: Easing.linear }),
         -1,
         false
       )
