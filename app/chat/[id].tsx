@@ -46,6 +46,8 @@ export default function ChatScreen() {
     addMessage,
     updateMessage,
     updateSessionStatus,
+    setCompletedTimer,
+    clearCompletedTimer,
     sessionStatuses,
     sessions,
     fetchSessions,
@@ -103,6 +105,12 @@ export default function ChatScreen() {
   const [contextUsage, setContextUsage] = useState(0)
   const contextUsageRef = useRef(0) // 用于模拟数据累加
 
+  // 使用 ref 存储 WebSocket status 以避免闭包问题
+  const statusRef = useRef(status)
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
+
   // 进入页面时，立即从保存的状态恢复
   useEffect(() => {
     const savedStatus = getInitialStatus()
@@ -114,7 +122,8 @@ export default function ChatScreen() {
       statusCheckTimeoutRef.current = setTimeout(() => {
         // 只有当 WebSocket 状态不是 connected 时才清除状态
         // 这意味着如果 WebSocket 仍然连接中，不要错误地清除状态
-        if (status !== 'connected') {
+        // 使用 ref 获取最新状态，避免闭包问题
+        if (statusRef.current !== 'connected') {
           setChatStatus('idle')
           if (id) updateSessionStatus(id, 'idle')
         }
@@ -130,6 +139,10 @@ export default function ChatScreen() {
         clearTimeout(idleStatusTimerRef.current)
         idleStatusTimerRef.current = null
       }
+      if (completedStatusTimerRef.current) {
+        clearTimeout(completedStatusTimerRef.current)
+        completedStatusTimerRef.current = null
+      }
     }
   }, [id, getInitialStatus, updateSessionStatus, status])
 
@@ -140,6 +153,8 @@ export default function ChatScreen() {
   const statusCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastUserSendTimeRef = useRef<number>(0) // 记录最后一次用户发送消息的时间
   const idleStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // idle 状态延迟更新定时器
+  const completedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // completed 状态 1 分钟清除定时器
+  const completedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // completed 状态 1 分钟清除定时器
 
   // 状态点闪烁动画
   const dotOpacity = useRef(new Animated.Value(1)).current
@@ -404,6 +419,24 @@ export default function ChatScreen() {
         setStreamingThinking('')
         setChatStatus('completed')
         setStatusVerb('')
+
+        // 清除之前的 completed 定时器
+        if (completedStatusTimerRef.current) {
+          clearTimeout(completedStatusTimerRef.current)
+          completedStatusTimerRef.current = null
+        }
+
+        // 设置 1 分钟后自动清除 completed 状态
+        completedStatusTimerRef.current = setTimeout(() => {
+          // 再次检查状态，确保没有新的工作状态
+          if (chatStatus === 'completed') {
+            setChatStatus('idle')
+            setStatusVerb('')
+            if (id) updateSessionStatus(id, 'idle')
+          }
+          completedStatusTimerRef.current = null
+        }, 60000) as unknown as ReturnType<typeof setTimeout>
+
         // 更新全局状态，让会话列表也能看到
         if (id) updateSessionStatus(id, 'completed')
         break
@@ -422,12 +455,17 @@ export default function ChatScreen() {
             const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
             const newState = lastMessage.state
 
-            // 如果收到工作状态，立即更新并清除任何待处理的 idle 定时器
+            // 如果收到工作状态，立即更新并清除所有待处理的定时器
             if (workingStates.includes(newState)) {
               // 清除待处理的 idle 更新
               if (idleStatusTimerRef.current) {
                 clearTimeout(idleStatusTimerRef.current)
                 idleStatusTimerRef.current = null
+              }
+              // 清除待处理的 completed 定时器
+              if (completedStatusTimerRef.current) {
+                clearTimeout(completedStatusTimerRef.current)
+                completedStatusTimerRef.current = null
               }
               setChatStatus(newState as any)
               if (lastMessage.verb) {
@@ -457,13 +495,31 @@ export default function ChatScreen() {
                 updateSessionStatus(lastMessage.sessionId, 'idle')
               }
             } else if (newState === 'completed') {
-              // completed 状态直接更新
+              // completed 状态直接更新，并设置 1 分钟定时器
               if (idleStatusTimerRef.current) {
                 clearTimeout(idleStatusTimerRef.current)
                 idleStatusTimerRef.current = null
               }
               setChatStatus('completed')
               setStatusVerb('')
+
+              // 清除之前的 completed 定时器
+              if (completedStatusTimerRef.current) {
+                clearTimeout(completedStatusTimerRef.current)
+                completedStatusTimerRef.current = null
+              }
+
+              // 设置 1 分钟后自动清除 completed 状态
+              completedStatusTimerRef.current = setTimeout(() => {
+                // 再次检查状态，确保没有新的工作状态
+                if (chatStatus === 'completed') {
+                  setChatStatus('idle')
+                  setStatusVerb('')
+                  if (id) updateSessionStatus(id, 'idle')
+                }
+                completedStatusTimerRef.current = null
+              }, 60000) as unknown as ReturnType<typeof setTimeout>
+
               updateSessionStatus(lastMessage.sessionId, 'completed')
             }
           } else {
@@ -513,20 +569,6 @@ export default function ChatScreen() {
         setStatusVerb('等待权限...')
         break
       }
-
-      case 'message_complete':
-        // 消息完成：设置为 completed
-        if (statusCheckTimeoutRef.current) {
-          clearTimeout(statusCheckTimeoutRef.current)
-          statusCheckTimeoutRef.current = null
-        }
-        if (idleStatusTimerRef.current) {
-          clearTimeout(idleStatusTimerRef.current)
-          idleStatusTimerRef.current = null
-        }
-        setChatStatus('completed')
-        setStatusVerb('')
-        break
 
       case 'session_title_updated': {
         if (lastMessage.sessionId && lastMessage.title) {
@@ -597,6 +639,12 @@ export default function ChatScreen() {
     // Reset context usage for new message
     resetContextUsage()
 
+    // Clear any pending completed timer
+    if (completedStatusTimerRef.current) {
+      clearTimeout(completedStatusTimerRef.current)
+      completedStatusTimerRef.current = null
+    }
+
     // Set thinking status and record send time
     setChatStatus('thinking')
     setStatusVerb('Thinking')
@@ -620,6 +668,11 @@ export default function ChatScreen() {
     setStreamingThinking('')
     setChatStatus('idle')
     setStatusVerb('')
+    // Clear any pending completed timer
+    if (completedStatusTimerRef.current) {
+      clearTimeout(completedStatusTimerRef.current)
+      completedStatusTimerRef.current = null
+    }
   }, [send])
 
   const handlePermissionAllow = useCallback((requestId: string, always: boolean) => {

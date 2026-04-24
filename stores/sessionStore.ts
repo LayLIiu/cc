@@ -53,12 +53,16 @@ type SessionState = {
   currentSessionId: string | null
   messages: Record<string, Message[]>
   messageIds: Record<string, Set<string>> // 快速查重
+  // 状态和时间戳作为单一对象存储，确保原子更新
   sessionStatuses: Record<string, SessionStatus>
-  sessionStatusTimestamps: Record<string, number> // 状态更新时间戳
-  recentProjects: RecentProject[]
+  sessionStatusTimestamps: Record<string, number>
+  // completed 状态的定时器引用（用于 1 分钟后自动清除）
+  completedTimers: Record<string, ReturnType<typeof setTimeout>> // timerId 用于清理
+  // 加载状态
   isLoading: boolean
   isCreating: boolean
   error: string | null
+  recentProjects: RecentProject[]
 
   fetchSessions: () => Promise<void>
   setCurrentSession: (id: string | null) => void
@@ -68,6 +72,8 @@ type SessionState = {
   updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void
   updateSessionStatus: (sessionId: string, status: SessionStatus) => void
   clearStaleSessionStatuses: () => void
+  clearCompletedTimer: (sessionId: string) => void
+  setCompletedTimer: (sessionId: string, timerId: ReturnType<typeof setTimeout>) => void
   createSession: (workDir?: string) => Promise<string | null>
   deleteSession: (sessionId: string) => Promise<void>
   importSessions: (sessionIds: string[], sessionInfos?: Session[]) => Promise<number>
@@ -83,6 +89,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   messageIds: {},
   sessionStatuses: {},
   sessionStatusTimestamps: {},
+  completedTimers: {},
   recentProjects: [],
   isLoading: false,
   isCreating: false,
@@ -192,16 +199,49 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   updateSessionStatus: (sessionId, status) => {
+    const now = Date.now()
+    set((state) => {
+      // 如果状态变为非 completed，清除对应的定时器
+      if (status !== 'completed' && state.completedTimers[sessionId]) {
+        clearTimeout(state.completedTimers[sessionId])
+      }
+
+      return {
+        sessionStatuses: {
+          ...state.sessionStatuses,
+          [sessionId]: status,
+        },
+        sessionStatusTimestamps: {
+          ...state.sessionStatusTimestamps,
+          [sessionId]: now,
+        },
+        // 如果不是 completed 状态，清除定时器
+        completedTimers: status !== 'completed'
+          ? Object.fromEntries(Object.entries(state.completedTimers).filter(([id]) => id !== sessionId))
+          : state.completedTimers,
+      }
+    })
+  },
+
+  setCompletedTimer: (sessionId, timerId) => {
     set((state) => ({
-      sessionStatuses: {
-        ...state.sessionStatuses,
-        [sessionId]: status,
-      },
-      sessionStatusTimestamps: {
-        ...state.sessionStatusTimestamps,
-        [sessionId]: Date.now(),
+      completedTimers: {
+        ...state.completedTimers,
+        [sessionId]: timerId,
       },
     }))
+  },
+
+  clearCompletedTimer: (sessionId) => {
+    set((state) => {
+      const timerId = state.completedTimers[sessionId]
+      if (timerId) {
+        clearTimeout(timerId)
+      }
+      const newTimers = { ...state.completedTimers }
+      delete newTimers[sessionId]
+      return { completedTimers: newTimers }
+    })
   },
 
   // 清除超过 10 分钟未更新的状态（给桌面端足够长的时间完成思考）
@@ -212,6 +252,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set((state) => {
       const newStatuses: Record<string, SessionStatus> = {}
       const newTimestamps: Record<string, number> = {}
+      const newTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 
       for (const [sessionId, status] of Object.entries(state.sessionStatuses)) {
         const timestamp = state.sessionStatusTimestamps[sessionId] || 0
@@ -219,12 +260,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (now - timestamp < staleThreshold) {
           newStatuses[sessionId] = status
           newTimestamps[sessionId] = timestamp
+          // 保留对应的定时器
+          if (state.completedTimers[sessionId]) {
+            newTimers[sessionId] = state.completedTimers[sessionId]
+          }
+        } else {
+          // 清理过期状态时，同时清理对应的定时器
+          const timer = state.completedTimers[sessionId]
+          if (timer) {
+            clearTimeout(timer)
+          }
         }
       }
 
       return {
         sessionStatuses: newStatuses,
         sessionStatusTimestamps: newTimestamps,
+        completedTimers: newTimers,
       }
     })
   },

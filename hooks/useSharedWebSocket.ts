@@ -79,6 +79,26 @@ class WebSocketManager {
     }
   }
 
+  // 断开所有连接（用于切换服务器或登出时）
+  disconnectAll() {
+    for (const [sessionId, conn] of this.connections) {
+      // 清理重连定时器
+      if (conn.reconnectTimer) {
+        clearTimeout(conn.reconnectTimer)
+        conn.reconnectTimer = null
+      }
+      // 关闭 WebSocket
+      if (conn.ws) {
+        try {
+          conn.ws.close()
+        } catch (e) {}
+      }
+      conn.handlers.clear()
+    }
+    this.connections.clear()
+    console.log('[SharedWS] All connections cleared')
+  }
+
   // 获取连接状态
   getConnection(sessionId: string): Connection | null {
     return this.connections.get(sessionId) || null
@@ -188,12 +208,19 @@ class WebSocketManager {
       return
     }
 
+    // 先清理旧的定时器
+    if (conn.reconnectTimer) {
+      clearTimeout(conn.reconnectTimer)
+      conn.reconnectTimer = null
+    }
+
     conn.reconnectAttempts++
     const delay = Math.min(1000 * Math.pow(2, conn.reconnectAttempts - 1), 10000)
 
     console.log(`[SharedWS] Reconnecting to ${sessionId} in ${delay}ms`)
 
     conn.reconnectTimer = setTimeout(() => {
+      conn.reconnectTimer = null
       if (this.connections.get(sessionId) === conn) {
         this.establishConnection(sessionId, conn)
       }
@@ -236,7 +263,7 @@ class WebSocketManager {
 }
 
 // 单例实例
-const wsManager = new WebSocketManager()
+export const wsManager = new WebSocketManager()
 
 // 启动清理任务
 wsManager.startCleanup()
@@ -306,8 +333,8 @@ export function useSharedWebSocket(sessionId: string | null) {
 export function useGlobalStatus() {
   const updateSessionStatus = useSessionStore((state) => state.updateSessionStatus)
   const clearStaleSessionStatuses = useSessionStore((state) => state.clearStaleSessionStatuses)
-  const sessionStatuses = useSessionStore((state) => state.sessionStatuses)
-  const sessionStatusTimestamps = useSessionStore((state) => state.sessionStatusTimestamps)
+  const setCompletedTimer = useSessionStore((state) => state.setCompletedTimer)
+  const clearCompletedTimer = useSessionStore((state) => state.clearCompletedTimer)
   const serverUrl = useAuthStore((state) => state.serverUrl)
   const isHydrated = useAuthStore((state) => state.isHydrated)
   const subscribedRef = useRef<Set<string>>(new Set())
@@ -315,6 +342,18 @@ export function useGlobalStatus() {
   const prevServerUrlRef = useRef<string>('')
   const lastSubscribeTimeRef = useRef<number>(0)
   const idleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  // 清除所有定时器的辅助函数
+  const clearAllTimersForSession = useCallback((sessionId: string) => {
+    // 清除 idle 定时器
+    const idleTimer = idleTimersRef.current.get(sessionId)
+    if (idleTimer) {
+      clearTimeout(idleTimer)
+      idleTimersRef.current.delete(sessionId)
+    }
+    // 清除 completed 定时器（通过 store）
+    clearCompletedTimer(sessionId)
+  }, [clearCompletedTimer])
 
   // 检查并清除过期的 completed 状态（1 分钟后自动变为 idle）
   const checkAndClearCompletedStatus = useCallback(() => {
@@ -329,11 +368,13 @@ export function useGlobalStatus() {
         const timestamp = timestamps[sessionId] || 0
         if (now - timestamp > completedTimeout) {
           console.log(`[GlobalStatus] Clearing completed status for ${sessionId}, age: ${Math.round((now - timestamp) / 1000)}s`)
+          // 清除定时器
+          clearCompletedTimer(sessionId)
           updateStatus(sessionId, 'idle')
         }
       }
     }
-  }, [])
+  }, [clearCompletedTimer])
 
   // 获取所有会话并订阅
   const subscribeAllSessions = useCallback(async () => {
@@ -380,12 +421,16 @@ export function useGlobalStatus() {
               // 当前会话由聊天页面处理，这里跳过大部分消息
               // 但 message_complete 需要处理，因为聊天页面可能已经关闭
               if (msg.type === 'message_complete') {
-                const timer = idleTimersRef.current.get(session.id)
-                if (timer) {
-                  clearTimeout(timer)
-                  idleTimersRef.current.delete(session.id)
-                }
+                clearAllTimersForSession(session.id)
                 updateSessionStatus(session.id, 'completed')
+                // 设置 1 分钟后自动清除 completed 状态
+                const timerId = setTimeout(() => {
+                  const { sessionStatuses: statuses, updateSessionStatus: updateStatus } = useSessionStore.getState()
+                  if (statuses[session.id] === 'completed') {
+                    updateStatus(session.id, 'idle')
+                  }
+                }, 60000)
+                setCompletedTimer(session.id, timerId)
               }
               return
             }
@@ -394,13 +439,9 @@ export function useGlobalStatus() {
               const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
               const newState = msg.state
 
-              // 如果收到工作状态，立即更新并清除待处理的 idle 定时器
+              // 如果收到工作状态，立即更新并清除所有定时器
               if (workingStates.includes(newState)) {
-                const timer = idleTimersRef.current.get(session.id)
-                if (timer) {
-                  clearTimeout(timer)
-                  idleTimersRef.current.delete(session.id)
-                }
+                clearAllTimersForSession(session.id)
                 updateSessionStatus(session.id, newState as any)
               } else if (newState === 'idle') {
                 // 获取当前状态
@@ -411,13 +452,17 @@ export function useGlobalStatus() {
                 if (currentStatus === 'completed') {
                   console.log(`[GlobalStatus] Ignoring idle status for ${session.id} when in completed state`)
                 } else if (workingStates.includes(currentStatus)) {
-                  // 当前是工作状态，延迟 2 秒再切换到 idle
+                  // 当前是工作状态，延迟 2 秒再切换到 idle（防抖）
                   const existingTimer = idleTimersRef.current.get(session.id)
                   if (existingTimer) {
                     clearTimeout(existingTimer)
                   }
                   const timer = setTimeout(() => {
-                    updateSessionStatus(session.id, 'idle')
+                    // 再次检查状态，确保没有新的工作状态
+                    const latestStatus = useSessionStore.getState().sessionStatuses[session.id]
+                    if (!workingStates.includes(latestStatus) && latestStatus !== 'completed') {
+                      updateSessionStatus(session.id, 'idle')
+                    }
                     idleTimersRef.current.delete(session.id)
                   }, 2000)
                   idleTimersRef.current.set(session.id, timer)
@@ -426,29 +471,33 @@ export function useGlobalStatus() {
                   updateSessionStatus(session.id, 'idle')
                 }
               } else if (newState === 'completed') {
-                // completed 状态直接更新
-                const timer = idleTimersRef.current.get(session.id)
-                if (timer) {
-                  clearTimeout(timer)
-                  idleTimersRef.current.delete(session.id)
-                }
+                // completed 状态直接更新，并设置 1 分钟定时器
+                clearAllTimersForSession(session.id)
                 updateSessionStatus(session.id, 'completed')
+                // 设置 1 分钟后自动清除 completed 状态
+                const timerId = setTimeout(() => {
+                  const { sessionStatuses: statuses, updateSessionStatus: updateStatus } = useSessionStore.getState()
+                  if (statuses[session.id] === 'completed') {
+                    updateStatus(session.id, 'idle')
+                  }
+                }, 60000)
+                setCompletedTimer(session.id, timerId)
               }
             } else if (msg.type === 'permission_request') {
-              const timer = idleTimersRef.current.get(session.id)
-              if (timer) {
-                clearTimeout(timer)
-                idleTimersRef.current.delete(session.id)
-              }
+              clearAllTimersForSession(session.id)
               updateSessionStatus(session.id, 'permission_pending')
             } else if (msg.type === 'message_complete') {
               // 消息完成时设置为 completed 状态，1 分钟后自动变为 idle
-              const timer = idleTimersRef.current.get(session.id)
-              if (timer) {
-                clearTimeout(timer)
-                idleTimersRef.current.delete(session.id)
-              }
+              clearAllTimersForSession(session.id)
               updateSessionStatus(session.id, 'completed')
+              // 设置 1 分钟后自动清除 completed 状态
+              const timerId = setTimeout(() => {
+                const { sessionStatuses: statuses, updateSessionStatus: updateStatus } = useSessionStore.getState()
+                if (statuses[session.id] === 'completed') {
+                  updateStatus(session.id, 'idle')
+                }
+              }, 60000) as unknown as number
+              setCompletedTimer(session.id, timerId)
             }
           })
           unsubscribesRef.current.set(session.id, unsubscribe)
@@ -496,8 +545,13 @@ export function useGlobalStatus() {
       }
       unsubscribesRef.current.clear()
       subscribedRef.current.clear()
+      // 清除所有 completed 定时器（通过 store）
+      const { completedTimers } = useSessionStore.getState()
+      for (const sessionId of Object.keys(completedTimers)) {
+        clearCompletedTimer(sessionId)
+      }
     }
-  }, [subscribeAllSessions, clearStaleSessionStatuses, checkAndClearCompletedStatus, serverUrl])
+  }, [subscribeAllSessions, clearStaleSessionStatuses, checkAndClearCompletedStatus, serverUrl, clearCompletedTimer])
 
   return {}
 }
