@@ -1,22 +1,44 @@
-import React, { useState, memo } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Animated, Modal } from 'react-native'
+import React, { useState, memo, useMemo } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet, Animated, Modal, TextInput } from 'react-native'
 import { useTheme } from '@/utils/theme'
 import type { Session, SessionStatus } from '@/types/session'
 import { ClaudeLogoWidget } from './shared/ClaudeLogoWidget'
+import PixelMascot from './shared/PixelMascot'
 
 type SessionItemProps = {
   session: Session
   onPress: () => void
   onDelete?: () => void
+  onRename?: (sessionId: string, newTitle: string) => void
   isActive?: boolean
   status?: SessionStatus
 }
 
-const SessionItemComponent = ({ session, onPress, onDelete, isActive, status = 'idle' }: SessionItemProps) => {
+// Generate consistent random color from string
+const generateColorFromString = (str: string): string => {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+
+  const hue = Math.abs(hash % 360)
+  const saturation = 65 + Math.abs((hash >> 8) % 20)
+  const lightness = 55 + Math.abs((hash >> 16) % 10)
+
+  return `hsl(${hue}, ${saturation}%, ${lightness}%)`
+}
+
+const SessionItemComponent = ({ session, onPress, onDelete, onRename, isActive, status = 'idle' }: SessionItemProps) => {
   const { colors } = useTheme()
   const [translateX] = useState(new Animated.Value(0))
   const [isSwipeOpen, setIsSwipeOpen] = useState(false)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [showRenameModal, setShowRenameModal] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+
+  const mascotColor = useMemo(() => generateColorFromString(session.id), [session.id])
 
   if (!session) return null
 
@@ -40,7 +62,7 @@ const SessionItemComponent = ({ session, onPress, onDelete, isActive, status = '
 
   const openSwipe = () => {
     Animated.spring(translateX, {
-      toValue: -80,
+      toValue: -140,
       useNativeDriver: true,
       tension: 100,
       friction: 10,
@@ -81,10 +103,35 @@ const SessionItemComponent = ({ session, onPress, onDelete, isActive, status = '
     closeSwipe()
   }
 
+  const handleRename = () => {
+    setNewTitle(session.title || '')
+    setShowRenameModal(true)
+  }
+
+  const handleConfirmRename = () => {
+    if (newTitle.trim()) {
+      onRename?.(session.id, newTitle.trim())
+    }
+    setShowRenameModal(false)
+    closeSwipe()
+  }
+
+  const handleCancelRename = () => {
+    setShowRenameModal(false)
+  }
+
   return (
     <View style={styles.wrapper}>
-      {/* Delete button underneath */}
-      <View style={styles.deleteContainer}>
+      {/* Action buttons underneath */}
+      <View style={styles.actionContainer}>
+        <TouchableOpacity
+          style={styles.renameButton}
+          onPress={handleRename}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.renameIcon}>✏️</Text>
+          <Text style={styles.renameText}>重命名</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.deleteButton}
           onPress={handleDelete}
@@ -119,7 +166,11 @@ const SessionItemComponent = ({ session, onPress, onDelete, isActive, status = '
                 forceMode="thinking"
               />
             ) : (
-              <Text style={styles.icon}>💬</Text>
+              <PixelMascot
+                size={28}
+                status="idle"
+                color={mascotColor}
+              />
             )}
           </View>
 
@@ -196,6 +247,42 @@ const SessionItemComponent = ({ session, onPress, onDelete, isActive, status = '
           </View>
         </View>
       </Modal>
+
+      {/* Rename modal */}
+      <Modal
+        visible={showRenameModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCancelRename}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>重命名对话</Text>
+            <TextInput
+              style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+              value={newTitle}
+              onChangeText={setNewTitle}
+              placeholder="输入新名称"
+              placeholderTextColor={colors.textTertiary}
+              autoFocus
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.surfaceContainer }]}
+                onPress={handleCancelRename}
+              >
+                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, { backgroundColor: colors.primary }]}
+                onPress={handleConfirmRename}
+              >
+                <Text style={styles.modalButtonTextWhite}>确定</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   )
 }
@@ -206,17 +293,34 @@ const styles = StyleSheet.create({
   wrapper: {
     position: 'relative',
   },
-  deleteContainer: {
+  actionContainer: {
     position: 'absolute',
     right: 0,
     top: 0,
     bottom: 0,
-    width: 80,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  renameButton: {
+    width: 60,
+    height: 50,
+    borderRadius: 8,
+    backgroundColor: '#6366f1',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  renameIcon: {
+    fontSize: 16,
+  },
+  renameText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+  },
   deleteButton: {
-    width: 70,
+    width: 60,
     height: 50,
     borderRadius: 8,
     backgroundColor: '#ef4444',
@@ -228,7 +332,7 @@ const styles = StyleSheet.create({
   },
   deleteText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
     marginTop: 2,
   },
@@ -346,5 +450,12 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+    marginBottom: 16,
   },
 })

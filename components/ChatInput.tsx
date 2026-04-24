@@ -7,7 +7,7 @@ import {
   StyleSheet,
 } from 'react-native'
 import { useTheme } from '@/utils/theme'
-import { ClaudeLogoWidget } from './shared/ClaudeLogoWidget'
+import { ModelSelector } from './ModelSelector'
 
 type ChatInputProps = {
   onSend: (message: string) => void
@@ -34,13 +34,8 @@ const ChatInputComponent = ({ onSend, onStop, placeholder = '发送消息...', c
 
   return (
     <View style={[styles.container, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
-      {/* 戴安娜 Logo */}
-      <View style={styles.logoContainer}>
-        <ClaudeLogoWidget
-          size={36}
-          chatStatus={chatStatus}
-        />
-      </View>
+      {/* 模型选择器 */}
+      <ModelSelector compact />
 
       <TextInput
         style={[styles.input, { backgroundColor: colors.surface, color: colors.text }]}
@@ -79,12 +74,6 @@ const styles = StyleSheet.create({
     padding: 16,
     borderTopWidth: 1,
     gap: 10,
-    alignItems: 'flex-end',
-  },
-  logoContainer: {
-    width: 36,
-    height: 36,
-    justifyContent: 'center',
     alignItems: 'center',
   },
   input: {

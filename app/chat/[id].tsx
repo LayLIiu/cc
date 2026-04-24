@@ -12,7 +12,7 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, Stack, useNavigation } from 'expo-router'
 import { useSessionStore } from '@/stores/sessionStore'
-import { useWebSocket } from '@/hooks/useWebSocket'
+import { useSharedWebSocket } from '@/hooks/useSharedWebSocket'
 import { MessageBubble } from '@/components/MessageBubble'
 import { ChatInput } from '@/components/ChatInput'
 import { PermissionDialog } from '@/components/chat/PermissionDialog'
@@ -93,11 +93,16 @@ export default function ChatScreen() {
     if (savedStatus !== 'idle') {
       setChatStatus(savedStatus)
 
-      // 设置超时：如果 3 秒内没有收到状态更新，说明 AI 已经完成
+      // 设置超时：如果 30 秒内没有收到任何消息，才认为是连接断开
+      // 给予足够长的时间让 WebSocket 重连并继续接收消息
       statusCheckTimeoutRef.current = setTimeout(() => {
-        setChatStatus('idle')
-        if (id) updateSessionStatus(id, 'idle')
-      }, 3000)
+        // 只有当 WebSocket 状态不是 connected 时才清除状态
+        // 这意味着如果 WebSocket 仍然连接中，不要错误地清除状态
+        if (status !== 'connected') {
+          setChatStatus('idle')
+          if (id) updateSessionStatus(id, 'idle')
+        }
+      }, 30000) // 30 秒超时
     }
 
     return () => {
@@ -106,7 +111,7 @@ export default function ChatScreen() {
         statusCheckTimeoutRef.current = null
       }
     }
-  }, [id, getInitialStatus, updateSessionStatus])
+  }, [id, getInitialStatus, updateSessionStatus, status])
 
   const flatListRef = useRef<FlatList>(null)
   const processedIds = useRef(new Set<string>())
@@ -150,7 +155,7 @@ export default function ChatScreen() {
     pendingToolUseIds: new Set(),
   })
 
-  const { status, lastMessage, clearLastMessage, send } = useWebSocket(id)
+  const { status, lastMessage, clearLastMessage, send } = useSharedWebSocket(id)
 
   // Fetch messages on mount
   useEffect(() => {
@@ -336,7 +341,15 @@ export default function ChatScreen() {
           clearTimeout(statusCheckTimeoutRef.current)
           statusCheckTimeoutRef.current = null
         }
-        if (lastMessage.state) {
+        // 如果消息包含 sessionId，更新对应会话的状态
+        if (lastMessage.sessionId && lastMessage.state) {
+          updateSessionStatus(lastMessage.sessionId, lastMessage.state as any)
+          // 如果是当前会话，也更新本地状态
+          if (lastMessage.sessionId === id) {
+            setChatStatus(lastMessage.state as any)
+          }
+        } else if (lastMessage.state) {
+          // 兼容旧格式：没有 sessionId，更新当前会话
           setChatStatus(lastMessage.state as any)
         }
         if (lastMessage.verb) {
@@ -574,7 +587,8 @@ export default function ChatScreen() {
       <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>
         {session?.title || '对话'}
       </Text>
-      <View style={styles.statusIndicator}>
+      <View style={styles.statusRow}>
+        <View style={styles.statusSpacer} />
         {chatStatus !== 'idle' && (
           <Animated.View style={[
             styles.statusDot,
@@ -587,6 +601,7 @@ export default function ChatScreen() {
         ]}>
           {chatStatus !== 'idle' ? '工作中' : '等待中'}
         </Text>
+        <View style={styles.statusSpacer} />
       </View>
     </View>
   ), [session?.title, chatStatus, colors, dotOpacity])
@@ -627,17 +642,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
-  statusIndicator: {
+  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
     marginTop: 2,
+  },
+  statusSpacer: {
+    width: 10,
   },
   statusDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
+    marginRight: 4,
   },
   statusText: {
     fontSize: 11,

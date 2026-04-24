@@ -1,5 +1,12 @@
 import { useAuthStore } from '@/stores/authStore'
 import type { Session, Message } from '@/types/session'
+import type { SavedProvider, CreateProviderInput, UpdateProviderInput, TestProviderConfigInput, ProviderTestResult, ProviderPreset } from '@/types/provider'
+
+export type ModelInfo = {
+  id: string
+  name: string
+  description?: string
+}
 
 export type RecentProject = {
   projectPath: string
@@ -86,6 +93,17 @@ class ApiClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
       throw new Error(error.message || '删除会话失败')
+    }
+  }
+
+  async renameSession(sessionId: string, title: string): Promise<void> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '重命名失败')
     }
   }
 
@@ -261,6 +279,182 @@ class ApiClient {
     for (let i = toRemove.length - 1; i >= 0; i--) {
       messages.splice(toRemove[i], 1)
     }
+  }
+
+  // Providers API
+  async getProviders(): Promise<{ providers: SavedProvider[]; activeId: string | null }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers`)
+    if (!response.ok) throw new Error('获取服务商列表失败')
+    return response.json()
+  }
+
+  async getProviderPresets(): Promise<{ presets: ProviderPreset[] }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/presets`)
+    if (!response.ok) throw new Error('获取服务商预设失败')
+    return response.json()
+  }
+
+  async getAuthStatus(): Promise<{ hasAuth: boolean; source: string; activeProvider?: string }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/auth-status`)
+    if (!response.ok) throw new Error('获取认证状态失败')
+    return response.json()
+  }
+
+  async createProvider(input: CreateProviderInput): Promise<{ provider: SavedProvider }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '创建服务商失败')
+    }
+    return response.json()
+  }
+
+  async updateProvider(id: string, input: UpdateProviderInput): Promise<{ provider: SavedProvider }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '更新服务商失败')
+    }
+    return response.json()
+  }
+
+  async deleteProvider(id: string): Promise<{ ok: true }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/${id}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '删除服务商失败')
+    }
+    return response.json()
+  }
+
+  async activateProvider(id: string): Promise<{ ok: true }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/${id}/activate`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '激活服务商失败')
+    }
+    return response.json()
+  }
+
+  async activateOfficialProvider(): Promise<{ ok: true }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/official`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '激活官方服务商失败')
+    }
+    return response.json()
+  }
+
+  async testProvider(id: string, overrides?: { baseUrl?: string; modelId?: string; apiFormat?: string }): Promise<{ result: ProviderTestResult }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/${id}/test`, {
+      method: 'POST',
+      body: JSON.stringify(overrides || {}),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '测试服务商失败')
+    }
+    return response.json()
+  }
+
+  async testProviderConfig(input: TestProviderConfigInput): Promise<{ result: ProviderTestResult }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/providers/test`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '测试配置失败')
+    }
+    return response.json()
+  }
+
+  // Models API
+  async getModels(): Promise<{ models: ModelInfo[]; provider: { id: string; name: string } | null }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/models`)
+    if (!response.ok) throw new Error('获取模型列表失败')
+    return response.json()
+  }
+
+  async getCurrentModel(): Promise<{ model: ModelInfo }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/models/current`)
+    if (!response.ok) throw new Error('获取当前模型失败')
+    return response.json()
+  }
+
+  async setCurrentModel(modelId: string): Promise<{ ok: true; model: string }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/models/current`, {
+      method: 'PUT',
+      body: JSON.stringify({ modelId }),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '设置模型失败')
+    }
+    return response.json()
+  }
+
+  async getEffort(): Promise<{ level: string; available: string[] }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/effort`)
+    if (!response.ok) throw new Error('获取 effort 失败')
+    return response.json()
+  }
+
+  async setEffort(level: string): Promise<{ ok: true; level: string }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/effort`, {
+      method: 'PUT',
+      body: JSON.stringify({ level }),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '设置 effort 失败')
+    }
+    return response.json()
+  }
+
+  // Pairing code and network settings API
+  async getPairingCode(): Promise<{ pairingCode: string; expiresAt: string }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/pairing-code`, {
+      method: 'POST',
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '获取配对码失败')
+    }
+    return response.json()
+  }
+
+  async getNetworkInfo(): Promise<{ lanUrl: string; tunnelUrl: string; tunnelEnabled: boolean }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/network-info`)
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '获取网络信息失败')
+    }
+    return response.json()
+  }
+
+  async enableTunnel(enabled: boolean): Promise<{ ok: true; tunnelUrl?: string }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/tunnel`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    })
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}))
+      throw new Error(error.message || '设置隧道失败')
+    }
+    return response.json()
   }
 }
 

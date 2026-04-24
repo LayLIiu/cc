@@ -54,6 +54,7 @@ type SessionState = {
   messages: Record<string, Message[]>
   messageIds: Record<string, Set<string>> // 快速查重
   sessionStatuses: Record<string, SessionStatus>
+  sessionStatusTimestamps: Record<string, number> // 状态更新时间戳
   recentProjects: RecentProject[]
   isLoading: boolean
   isCreating: boolean
@@ -66,6 +67,7 @@ type SessionState = {
   addMessage: (sessionId: string, message: Message) => void
   updateMessage: (sessionId: string, messageId: string, updates: Partial<Message>) => void
   updateSessionStatus: (sessionId: string, status: SessionStatus) => void
+  clearStaleSessionStatuses: () => void
   createSession: (workDir?: string) => Promise<string | null>
   deleteSession: (sessionId: string) => Promise<void>
   importSessions: (sessionIds: string[], sessionInfos?: Session[]) => Promise<number>
@@ -80,6 +82,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   messages: {},
   messageIds: {},
   sessionStatuses: {},
+  sessionStatusTimestamps: {},
   recentProjects: [],
   isLoading: false,
   isCreating: false,
@@ -194,7 +197,36 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         ...state.sessionStatuses,
         [sessionId]: status,
       },
+      sessionStatusTimestamps: {
+        ...state.sessionStatusTimestamps,
+        [sessionId]: Date.now(),
+      },
     }))
+  },
+
+  // 清除超过 10 分钟未更新的状态（给桌面端足够长的时间完成思考）
+  clearStaleSessionStatuses: () => {
+    const now = Date.now()
+    const staleThreshold = 10 * 60 * 1000 // 10 分钟 - 确保长时间思考不会被错误清理
+
+    set((state) => {
+      const newStatuses: Record<string, SessionStatus> = {}
+      const newTimestamps: Record<string, number> = {}
+
+      for (const [sessionId, status] of Object.entries(state.sessionStatuses)) {
+        const timestamp = state.sessionStatusTimestamps[sessionId] || 0
+        // 保留所有在阈值内更新的状态（包括工作状态）
+        if (now - timestamp < staleThreshold) {
+          newStatuses[sessionId] = status
+          newTimestamps[sessionId] = timestamp
+        }
+      }
+
+      return {
+        sessionStatuses: newStatuses,
+        sessionStatusTimestamps: newTimestamps,
+      }
+    })
   },
 
   createSession: async (workDir) => {
@@ -243,7 +275,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const sessionId = sessionIds[i]
       try {
         const messages = await apiClient.getMessages(sessionId)
-        const sessionInfo = sessionInfos?.find(s => s.id === sessionId)
+        const sessionInfo = sessionInfos?.find(s => s?.id === sessionId)
 
         await removeDeletedSession(sessionId)
 

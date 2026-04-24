@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, Modal, ActivityIndicator } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, TextInput, ActivityIndicator } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useAuthStore, type ThemeMode, type ServerMode } from '@/stores/authStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useTheme } from '@/utils/theme'
+import AnimatedModal from '@/components/AnimatedModal'
 
 // 版本信息 - 每次修改后更新
 const APP_VERSION = '1.1.0'
@@ -386,163 +387,147 @@ export default function SettingsScreen() {
       </Text>
 
       {/* 局域网地址编辑 Modal */}
-      <Modal
+      <AnimatedModal
         visible={showLanModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowLanModal(false)}
+        onClose={() => setShowLanModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>局域网地址</Text>
-            <TextInput
-              style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-              value={tempUrl}
-              onChangeText={setTempUrl}
-              placeholder="http://192.168.x.x:3456"
-              placeholderTextColor={colors.textTertiary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
-              输入桌面端的局域网地址{'\n'}
-              例如：http://192.168.3.33:3456
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.border }]}
-                onPress={() => setShowLanModal(false)}
-              >
-                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.primary }]}
-                onPress={handleSaveLan}
-              >
-                <Text style={styles.modalButtonTextWhite}>保存</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* 公网地址编辑 Modal */}
-      <Modal
-        visible={showTunnelModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowTunnelModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>公网地址</Text>
-            <TextInput
-              style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
-              value={tempUrl}
-              onChangeText={setTempUrl}
-              placeholder="https://xxx.trycloudflare.com"
-              placeholderTextColor={colors.textTertiary}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
-              输入 Cloudflare Tunnel 公网地址{'\n'}
-              或其他公网代理地址
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.border }]}
-                onPress={() => setShowTunnelModal(false)}
-              >
-                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.primary }]}
-                onPress={handleSaveTunnel}
-              >
-                <Text style={styles.modalButtonTextWhite}>保存</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Theme Selection Modal */}
-      <Modal
-        visible={showThemeModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowThemeModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>选择主题</Text>
-            {THEME_OPTIONS.map((opt) => (
-              <TouchableOpacity
-                key={opt.mode}
-                style={[
-                  styles.themeOption,
-                  {
-                    backgroundColor: themeMode === opt.mode ? colors.primary + '20' : colors.background,
-                    borderColor: themeMode === opt.mode ? colors.primary : colors.border,
-                  },
-                ]}
-                onPress={() => {
-                  setThemeMode(opt.mode)
-                  setShowThemeModal(false)
-                }}
-              >
-                <Text style={styles.themeIcon}>{opt.icon}</Text>
-                <Text style={[styles.themeLabel, { color: colors.text }]}>
-                  {opt.label}
-                </Text>
-                {themeMode === opt.mode && (
-                  <Text style={[styles.themeCheck, { color: colors.primary }]}>✓</Text>
-                )}
-              </TouchableOpacity>
-            ))}
+        <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.modalTitle, { color: colors.text }]}>局域网地址</Text>
+          <TextInput
+            style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+            value={tempUrl}
+            onChangeText={setTempUrl}
+            placeholder="http://192.168.x.x:3456"
+            placeholderTextColor={colors.textTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+            输入桌面端的局域网地址{'\n'}
+            例如：http://192.168.3.33:3456
+          </Text>
+          <View style={styles.modalButtons}>
             <TouchableOpacity
-              style={[styles.modalButton, { backgroundColor: colors.surfaceContainer, marginTop: 8 }]}
-              onPress={() => setShowThemeModal(false)}
+              style={[styles.modalButton, { backgroundColor: colors.border }]}
+              onPress={() => setShowLanModal(false)}
             >
               <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: colors.primary }]}
+              onPress={handleSaveLan}
+            >
+              <Text style={styles.modalButtonTextWhite}>保存</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </AnimatedModal>
+
+      {/* 公网地址编辑 Modal */}
+      <AnimatedModal
+        visible={showTunnelModal}
+        onClose={() => setShowTunnelModal(false)}
+      >
+        <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.modalTitle, { color: colors.text }]}>公网地址</Text>
+          <TextInput
+            style={[styles.modalInput, { backgroundColor: colors.background, color: colors.text, borderColor: colors.border }]}
+            value={tempUrl}
+            onChangeText={setTempUrl}
+            placeholder="https://xxx.trycloudflare.com"
+            placeholderTextColor={colors.textTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+          />
+          <Text style={[styles.modalHint, { color: colors.textTertiary }]}>
+            输入 Cloudflare Tunnel 公网地址{'\n'}
+            或其他公网代理地址
+          </Text>
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: colors.border }]}
+              onPress={() => setShowTunnelModal(false)}
+            >
+              <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: colors.primary }]}
+              onPress={handleSaveTunnel}
+            >
+              <Text style={styles.modalButtonTextWhite}>保存</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </AnimatedModal>
+
+      {/* Theme Selection Modal */}
+      <AnimatedModal
+        visible={showThemeModal}
+        onClose={() => setShowThemeModal(false)}
+      >
+        <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.modalTitle, { color: colors.text }]}>选择主题</Text>
+          {THEME_OPTIONS.map((opt) => (
+            <TouchableOpacity
+              key={opt.mode}
+              style={[
+                styles.themeOption,
+                {
+                  backgroundColor: themeMode === opt.mode ? colors.primary + '20' : colors.background,
+                  borderColor: themeMode === opt.mode ? colors.primary : colors.border,
+                },
+              ]}
+              onPress={() => {
+                setThemeMode(opt.mode)
+                setShowThemeModal(false)
+              }}
+            >
+              <Text style={styles.themeIcon}>{opt.icon}</Text>
+              <Text style={[styles.themeLabel, { color: colors.text }]}>
+                {opt.label}
+              </Text>
+              {themeMode === opt.mode && (
+                <Text style={[styles.themeCheck, { color: colors.primary }]}>✓</Text>
+              )}
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity
+            style={[styles.modalButton, { backgroundColor: colors.surfaceContainer, marginTop: 8 }]}
+            onPress={() => setShowThemeModal(false)}
+          >
+            <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+          </TouchableOpacity>
+        </View>
+      </AnimatedModal>
 
       {/* Logout Confirmation Modal */}
-      <Modal
+      <AnimatedModal
         visible={showLogoutModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowLogoutModal(false)}
+        onClose={() => setShowLogoutModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>退出登录</Text>
-            <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
-              确定要退出登录吗？
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.surfaceContainer }]}
-                onPress={() => setShowLogoutModal(false)}
-              >
-                <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, { backgroundColor: colors.error }]}
-                onPress={handleConfirmLogout}
-              >
-                <Text style={styles.modalButtonTextWhite}>退出</Text>
-              </TouchableOpacity>
-            </View>
+        <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.modalTitle, { color: colors.text }]}>退出登录</Text>
+          <Text style={[styles.modalMessage, { color: colors.textSecondary }]}>
+            确定要退出登录吗？
+          </Text>
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: colors.surfaceContainer }]}
+              onPress={() => setShowLogoutModal(false)}
+            >
+              <Text style={[styles.modalButtonText, { color: colors.text }]}>取消</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalButton, { backgroundColor: colors.error }]}
+              onPress={handleConfirmLogout}
+            >
+              <Text style={styles.modalButtonTextWhite}>退出</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </AnimatedModal>
     </ScrollView>
   )
 }
@@ -553,10 +538,10 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
+    paddingBottom: 60, // 底部留出 Tab 栏空间
   },
   header: {
     paddingTop: 44,
-    paddingBottom: 8,
     alignItems: 'center',
   },
   headerTitle: {
@@ -703,13 +688,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
   modalContent: {
     width: '100%',
     maxWidth: 400,

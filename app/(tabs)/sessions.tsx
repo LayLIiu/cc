@@ -16,6 +16,7 @@ import { useRouter } from 'expo-router'
 import { useSessionStore } from '@/stores/sessionStore'
 import { SessionItem } from '@/components/SessionItem'
 import { useTheme } from '@/utils/theme'
+import { apiClient } from '@/api/client'
 
 export default function SessionsScreen() {
   const router = useRouter()
@@ -33,6 +34,8 @@ export default function SessionsScreen() {
     createSession,
     deleteSession,
     fetchRecentProjects,
+    updateSessionTitle,
+    clearStaleSessionStatuses,
   } = useSessionStore()
 
   const [showNewModal, setShowNewModal] = useState(false)
@@ -45,8 +48,10 @@ export default function SessionsScreen() {
   useFocusEffect(
     useCallback(() => {
       console.log('[Sessions] Page focused, fetching sessions...')
+      // 清除过期状态（超过 10 秒未更新的状态）
+      clearStaleSessionStatuses()
       fetchSessions()
-    }, [fetchSessions])
+    }, [fetchSessions, clearStaleSessionStatuses])
   )
 
   const handleSessionPress = useCallback((sessionId: string) => {
@@ -88,6 +93,16 @@ export default function SessionsScreen() {
       Alert.alert('删除失败', err instanceof Error ? err.message : '无法删除对话')
     }
   }, [deleteSession])
+
+  const handleRenameSession = useCallback(async (sessionId: string, newTitle: string) => {
+    try {
+      await apiClient.renameSession(sessionId, newTitle)
+      // 更新本地状态
+      updateSessionTitle(sessionId, newTitle)
+    } catch (err) {
+      Alert.alert('重命名失败', err instanceof Error ? err.message : '无法重命名对话')
+    }
+  }, [updateSessionTitle])
 
   // Group sessions by date
   const groupedSessions = useCallback(() => {
@@ -187,6 +202,7 @@ export default function SessionsScreen() {
                     status={session?.id ? sessionStatuses[session.id] : undefined}
                     onPress={() => session?.id && handleSessionPress(session.id)}
                     onDelete={() => session?.id && handleDeleteSession(session.id)}
+                    onRename={handleRenameSession}
                   />
                   {index < group.data.length - 1 && (
                     <View style={[styles.separator, { backgroundColor: colors.border }]} />
@@ -196,7 +212,7 @@ export default function SessionsScreen() {
             </View>
           </View>
         )}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: 80 }]}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>
@@ -331,7 +347,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingTop: 60,
-    paddingBottom: 12,
   },
   headerTitle: {
     fontSize: 28,

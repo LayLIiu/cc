@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, ReactNode } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, LayoutChangeEvent } from 'react-native'
 import Animated, {
   useSharedValue,
@@ -7,8 +7,15 @@ import Animated, {
 } from 'react-native-reanimated'
 import { useTheme } from '@/utils/theme'
 
+export type TabItem = {
+  key: string
+  label?: string
+  icon?: string
+  iconComponent?: ReactNode // 自定义图标组件
+}
+
 type SegmentedTabProps = {
-  tabs: { key: string; label: string; icon: string }[]
+  tabs: TabItem[]
   activeTab: string
   onTabPress: (key: string) => void
 }
@@ -73,7 +80,7 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
       style={[
         styles.container,
         {
-          backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.05)',
+          backgroundColor: 'transparent',
         }
       ]}
       onLayout={handleLayout}
@@ -85,7 +92,7 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
             styles.indicator,
             {
               width: tabWidth,
-              backgroundColor: colors.primary,
+              backgroundColor: isDark ? 'rgba(100, 100, 100, 0.6)' : 'rgba(150, 150, 150, 0.6)',
             },
             indicatorStyle,
           ]}
@@ -104,16 +111,22 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
             activeOpacity={0.7}
           >
             <Animated.View style={styles.tabContent}>
-              <Text style={styles.icon}>{tab.icon}</Text>
-              <Animated.Text
-                style={[
-                  styles.label,
-                  { color: isActive ? '#fff' : colors.text },
-                  tabAnimatedStyles[index],
-                ]}
-              >
-                {tab.label}
-              </Animated.Text>
+              {tab.iconComponent ? (
+                tab.iconComponent
+              ) : (
+                <Text style={styles.icon}>{tab.icon}</Text>
+              )}
+              {tab.label && (
+                <Animated.Text
+                  style={[
+                    styles.label,
+                    { color: isActive ? '#fff' : colors.text },
+                    tabAnimatedStyles[index],
+                  ]}
+                >
+                  {tab.label}
+                </Animated.Text>
+              )}
             </Animated.View>
           </TouchableOpacity>
         )
@@ -125,23 +138,19 @@ export function SegmentedTab({ tabs, activeTab, onTabPress }: SegmentedTabProps)
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    borderRadius: 28,
+    borderRadius: 24,
     padding: 4,
-    marginHorizontal: 16,
-    marginVertical: 8,
+    marginHorizontal: 0,
+    marginVertical: 4,
     height: 52,
   },
   indicator: {
     position: 'absolute',
     height: 44,
-    borderRadius: 24,
+    borderRadius: 22,
     top: 4,
     left: 4,
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 4,
+    backgroundColor: 'rgba(120, 120, 120, 0.3)',
   },
   tab: {
     flex: 1,

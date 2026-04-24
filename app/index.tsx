@@ -1,15 +1,17 @@
 import { Redirect } from 'expo-router'
 import { View, ActivityIndicator, StyleSheet } from 'react-native'
 import { useAuthStore } from '@/stores/authStore'
+import { useTheme } from '@/utils/theme'
 
 export default function Index() {
   const { isLoggedIn, isHydrated } = useAuthStore()
+  const { colors } = useTheme()
 
   // Show loading screen while hydrating from AsyncStorage
   if (!isHydrated) {
     return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
+      <View style={[styles.loadingContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     )
   }
@@ -26,6 +28,5 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#fff',
   },
 })
