@@ -486,6 +486,9 @@ export function useGlobalStatus() {
             } else if (msg.type === 'permission_request') {
               clearAllTimersForSession(session.id)
               updateSessionStatus(session.id, 'permission_pending')
+            } else if (msg.type === 'question') {
+              clearAllTimersForSession(session.id)
+              updateSessionStatus(session.id, 'question_pending')
             } else if (msg.type === 'message_complete') {
               // 消息完成时设置为 completed 状态，1 分钟后自动变为 idle
               clearAllTimersForSession(session.id)

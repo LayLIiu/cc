@@ -16,6 +16,7 @@ import { useSharedWebSocket } from '@/hooks/useSharedWebSocket'
 import { MessageBubble } from '@/components/MessageBubble'
 import { ChatInput } from '@/components/ChatInput'
 import { PermissionDialog } from '@/components/chat/PermissionDialog'
+import { QuestionDialog } from '@/components/chat/QuestionDialog'
 import { useTheme } from '@/utils/theme'
 import { ContextRing } from '@/components/shared/ContextRing'
 import type { Message } from '@/types/session'
@@ -92,13 +93,18 @@ export default function ChatScreen() {
   // Streaming state
   const [streamingText, setStreamingText] = useState('')
   const [streamingThinking, setStreamingThinking] = useState('')
-  const [chatStatus, setChatStatus] = useState<'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending' | 'completed'>('idle')
+  const [chatStatus, setChatStatus] = useState<'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending' | 'question_pending' | 'completed'>('idle')
   const [statusVerb, setStatusVerb] = useState('')
   const [permissionRequest, setPermissionRequest] = useState<{
     requestId: string
     toolName: string
     input: Record<string, unknown>
     description?: string
+  } | null>(null)
+  const [questionRequest, setQuestionRequest] = useState<{
+    questionId: string
+    questionText: string
+    options: string[]
   } | null>(null)
 
   // 上下文容量使用百分比 (0-100)
@@ -153,7 +159,6 @@ export default function ChatScreen() {
   const statusCheckTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastUserSendTimeRef = useRef<number>(0) // 记录最后一次用户发送消息的时间
   const idleStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // idle 状态延迟更新定时器
-  const completedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // completed 状态 1 分钟清除定时器
   const completedStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // completed 状态 1 分钟清除定时器
 
   // 状态点闪烁动画
@@ -570,6 +575,22 @@ export default function ChatScreen() {
         break
       }
 
+      case 'question': {
+        // 清除待处理的 idle 更新
+        if (idleStatusTimerRef.current) {
+          clearTimeout(idleStatusTimerRef.current)
+          idleStatusTimerRef.current = null
+        }
+        setQuestionRequest({
+          questionId: lastMessage.questionId,
+          questionText: lastMessage.questionText || '',
+          options: lastMessage.options || [],
+        })
+        setChatStatus('question_pending')
+        setStatusVerb('等待回答...')
+        break
+      }
+
       case 'session_title_updated': {
         if (lastMessage.sessionId && lastMessage.title) {
           updateSessionTitle(lastMessage.sessionId, lastMessage.title)
@@ -701,6 +722,18 @@ export default function ChatScreen() {
     setStatusVerb('Thinking')
   }, [send])
 
+  const handleQuestionAnswer = useCallback((questionId: string, answer: string) => {
+    console.log('[Chat] Question answered:', questionId, answer)
+    send({
+      type: 'question_response',
+      questionId,
+      answer,
+    })
+    setQuestionRequest(null)
+    setChatStatus('thinking')
+    setStatusVerb('Thinking')
+  }, [send])
+
   // Handle scroll to show/hide scroll-to-bottom button
   const handleScroll = useCallback(({ nativeEvent }) => {
     // In inverted list, offset > 50 means user scrolled away from latest
@@ -797,6 +830,13 @@ export default function ChatScreen() {
         onAllow={handlePermissionAllow}
         onDeny={handlePermissionDeny}
       />
+
+      {/* Question Dialog */}
+      <QuestionDialog
+        visible={!!questionRequest}
+        request={questionRequest}
+        onAnswer={handleQuestionAnswer}
+      />
     </View>
   )
 
@@ -812,20 +852,23 @@ export default function ChatScreen() {
       {/* 状态行 - 固定宽度居中 */}
       <View style={styles.statusRow}>
         <View style={styles.statusSpacer} />
-        {chatStatus !== 'idle' && chatStatus !== 'completed' && (
+        {chatStatus !== 'idle' && chatStatus !== 'completed' && chatStatus !== 'question_pending' && (
           <Animated.View style={[
             styles.statusDot,
             { backgroundColor: '#22c55e', opacity: dotOpacity }
           ]} />
+        )}
+        {chatStatus === 'question_pending' && (
+          <View style={[styles.statusDot, { backgroundColor: '#f59e0b' }]} />
         )}
         {chatStatus === 'completed' && (
           <View style={[styles.statusDot, { backgroundColor: '#22c55e' }]} />
         )}
         <Text style={[
           styles.statusText,
-          { color: chatStatus === 'completed' ? '#22c55e' : chatStatus !== 'idle' ? '#22c55e' : colors.textTertiary }
+          { color: chatStatus === 'completed' ? '#22c55e' : chatStatus === 'question_pending' ? '#f59e0b' : chatStatus !== 'idle' ? '#22c55e' : colors.textTertiary }
         ]}>
-          {chatStatus === 'completed' ? '已完成' : chatStatus !== 'idle' ? '工作中' : '等待中'}
+          {chatStatus === 'completed' ? '已完成' : chatStatus === 'question_pending' ? '等待回答' : chatStatus !== 'idle' ? '工作中' : '等待中'}
         </Text>
         {/* 上下文容量指示器 */}
         {contextUsage > 0 && (

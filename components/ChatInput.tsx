@@ -13,14 +13,14 @@ type ChatInputProps = {
   onSend: (message: string) => void
   onStop?: () => void
   placeholder?: string
-  chatStatus?: 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending' | 'completed'
+  chatStatus?: 'idle' | 'thinking' | 'tool_executing' | 'streaming' | 'permission_pending' | 'question_pending' | 'completed'
 }
 
 const ChatInputComponent = ({ onSend, onStop, placeholder = '发送消息...', chatStatus = 'idle' }: ChatInputProps) => {
   const { colors } = useTheme()
   const [text, setText] = useState('')
 
-  const isWorking = chatStatus !== 'idle' && chatStatus !== 'completed'
+  const isWorking = chatStatus !== 'idle' && chatStatus !== 'completed' && chatStatus !== 'question_pending' && chatStatus !== 'permission_pending'
 
   const handleSend = () => {
     if (!text.trim()) return

@@ -249,35 +249,28 @@ class ApiClient {
   }
 
   private pairToolResults(messages: Message[]) {
-    // Find tool_use messages that don't have a paired tool_result yet
-    // and attach the result to the tool_use message
-    const toolUseMap = new Map<string, number>() // tool_use_id -> index in messages
-    for (let i = 0; i < messages.length; i++) {
-      if (messages[i].type === 'tool_use') {
-        toolUseMap.set(messages[i].id, i)
-      }
-    }
+    // 找到所有 tool_result 消息并配对到最近的未配对 tool_use
+    const toRemove = new Set<number>()
 
-    // Process tool_result messages - attach to the most recent unpaired tool_use
-    const toRemove: number[] = []
-    let lastToolUseIdx = -1
     for (let i = 0; i < messages.length; i++) {
       if (messages[i].type === 'tool_result') {
-        // Find the most recent tool_use before this tool_result
+        // 找到这条 tool_result 之前最近的未配对 tool_use
         for (let j = i - 1; j >= 0; j--) {
           if (messages[j].type === 'tool_use' && !messages[j].toolResult) {
             messages[j].toolResult = messages[i].toolResult
             messages[j].toolStatus = messages[i].toolStatus || 'completed'
-            toRemove.push(i)
+            toRemove.add(i)
             break
           }
         }
       }
     }
 
-    // Remove tool_result messages that have been paired
-    for (let i = toRemove.length - 1; i >= 0; i--) {
-      messages.splice(toRemove[i], 1)
+    // 使用 filter 方式移除已配对的 tool_result（更安全）
+    if (toRemove.size > 0) {
+      const remaining = messages.filter((_, idx) => !toRemove.has(idx))
+      messages.length = 0
+      messages.push(...remaining)
     }
   }
 
@@ -425,9 +418,11 @@ class ApiClient {
   }
 
   // Pairing code and network settings API
-  async getPairingCode(): Promise<{ pairingCode: string; expiresAt: string }> {
-    const response = await this.safeFetch(`${this.getBaseUrl()}/api/pairing-code`, {
+  async getPairingCode(): Promise<{ pairingCode: string; expiresAt: number; createdAt: number }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/mobile/pairing-code`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ttlHours: 1 }),
     })
     if (response.status === 404) {
       throw new Error('服务器暂不支持配对码功能')
@@ -439,11 +434,10 @@ class ApiClient {
     return response.json()
   }
 
-  async getNetworkInfo(): Promise<{ lanUrl: string; tunnelUrl: string; tunnelEnabled: boolean }> {
-    const response = await this.safeFetch(`${this.getBaseUrl()}/api/network-info`)
+  async getNetworkInfo(): Promise<{ lanUrl: string | null; tunnelUrl: string | null; tunnelEnabled: boolean; serverPort: number }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/mobile/network-info`)
     if (response.status === 404) {
-      // API 不存在，返回默认值
-      return { lanUrl: '', tunnelUrl: '', tunnelEnabled: false }
+      return { lanUrl: null, tunnelUrl: null, tunnelEnabled: false, serverPort: 0 }
     }
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
@@ -452,9 +446,10 @@ class ApiClient {
     return response.json()
   }
 
-  async enableTunnel(enabled: boolean): Promise<{ ok: true; tunnelUrl?: string }> {
-    const response = await this.safeFetch(`${this.getBaseUrl()}/api/tunnel`, {
+  async enableTunnel(enabled: boolean): Promise<{ ok: boolean; tunnelUrl?: string; error?: string }> {
+    const response = await this.safeFetch(`${this.getBaseUrl()}/api/mobile/tunnel`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
     })
     if (response.status === 404) {
