@@ -17,6 +17,7 @@ import { MessageBubble } from '@/components/MessageBubble'
 import { ChatInput } from '@/components/ChatInput'
 import { PermissionDialog } from '@/components/chat/PermissionDialog'
 import { useTheme } from '@/utils/theme'
+import { ContextRing } from '@/components/shared/ContextRing'
 import type { Message } from '@/types/session'
 
 const SCREEN_VERSION = 'v1.1.0 - 02:40'
@@ -50,9 +51,20 @@ export default function ChatScreen() {
     fetchSessions,
     updateSessionTitle,
     isLoading,
+    setCurrentSession,
   } = useSessionStore()
 
   const session = sessions.find((s): s is NonNullable<typeof s> => s?.id === id)
+
+  // 设置当前会话ID，用于全局状态判断
+  useEffect(() => {
+    if (id) {
+      setCurrentSession(id)
+    }
+    return () => {
+      setCurrentSession(null)
+    }
+  }, [id, setCurrentSession])
 
   // 从保存的状态中读取当前会话状态，进入页面时立即显示
   const getInitialStatus = useCallback(() => {
@@ -86,6 +98,10 @@ export default function ChatScreen() {
     input: Record<string, unknown>
     description?: string
   } | null>(null)
+
+  // 上下文容量使用百分比 (0-100)
+  const [contextUsage, setContextUsage] = useState(0)
+  const contextUsageRef = useRef(0) // 用于模拟数据累加
 
   // 进入页面时，立即从保存的状态恢复
   useEffect(() => {
@@ -127,6 +143,29 @@ export default function ChatScreen() {
 
   // 状态点闪烁动画
   const dotOpacity = useRef(new Animated.Value(1)).current
+
+  // 模拟上下文容量增加（当服务器端提供真实数据时会替换）
+  useEffect(() => {
+    const workingStates = ['thinking', 'tool_executing', 'streaming']
+    if (workingStates.includes(chatStatus)) {
+      // 每隔一段时间增加一点上下文使用量
+      const interval = setInterval(() => {
+        contextUsageRef.current = Math.min(100, contextUsageRef.current + Math.random() * 3 + 1)
+        setContextUsage(Math.round(contextUsageRef.current))
+      }, 2000)
+
+      return () => clearInterval(interval)
+    } else if (chatStatus === 'completed' || chatStatus === 'idle') {
+      // 完成或空闲时不重置，保持最后的使用量显示
+      // 可以在发送新消息时重置
+    }
+  }, [chatStatus])
+
+  // 发送新消息时重置上下文使用量
+  const resetContextUsage = useCallback(() => {
+    contextUsageRef.current = 0
+    setContextUsage(0)
+  }, [])
 
   useEffect(() => {
     if (chatStatus !== 'idle') {
@@ -211,13 +250,6 @@ export default function ChatScreen() {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
         }
-        // 如果当前不是工作状态，设置为 streaming
-        const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
-        if (!workingStates.includes(chatStatus)) {
-          setChatStatus('streaming')
-          setStatusVerb('')
-          if (id) updateSessionStatus(id, 'streaming')
-        }
 
         if (lastMessage.blockType === 'text') {
           streamState.inTextBlock = true
@@ -256,10 +288,6 @@ export default function ChatScreen() {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
         }
-        // 设置为 thinking 状态
-        setChatStatus('thinking')
-        setStatusVerb('Thinking')
-        if (id) updateSessionStatus(id, 'thinking')
 
         if (!streamState.inThinkingBlock) {
           streamState.inThinkingBlock = true
@@ -276,9 +304,6 @@ export default function ChatScreen() {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
         }
-        // 设置为 tool_executing 状态
-        setChatStatus('tool_executing')
-        if (id) updateSessionStatus(id, 'tool_executing')
 
         const toolUseId = lastMessage.toolUseId || `tool-${Date.now()}`
         streamState.pendingToolUseIds.add(toolUseId)
@@ -392,8 +417,7 @@ export default function ChatScreen() {
         }
         // 如果消息包含 sessionId，更新对应会话的状态
         if (lastMessage.sessionId && lastMessage.state) {
-          updateSessionStatus(lastMessage.sessionId, lastMessage.state as any)
-          // 如果是当前会话，也更新本地状态
+          // 如果是当前会话，处理状态更新
           if (lastMessage.sessionId === id) {
             const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
             const newState = lastMessage.state
@@ -409,28 +433,28 @@ export default function ChatScreen() {
               if (lastMessage.verb) {
                 setStatusVerb(lastMessage.verb)
               }
+              updateSessionStatus(lastMessage.sessionId, newState as any)
             } else if (newState === 'idle') {
-              // 如果在用户发送消息后的 2 秒内收到 idle 状态，忽略它
-              const timeSinceSend = Date.now() - lastUserSendTimeRef.current
-              if (timeSinceSend < 2000) {
-                console.log('[Chat] Ignoring idle status shortly after user send')
+              // 如果当前状态是 completed，忽略 idle 消息（让 1 分钟定时器处理）
+              if (chatStatus === 'completed') {
+                console.log('[Chat] Ignoring idle status when in completed state')
               } else if (workingStates.includes(chatStatus)) {
                 // 当前是工作状态，延迟 2 秒再切换到 idle
-                // 这样可以避免短暂的 idle 状态导致闪烁
                 console.log('[Chat] Delaying idle status update')
                 if (idleStatusTimerRef.current) {
                   clearTimeout(idleStatusTimerRef.current)
                 }
                 idleStatusTimerRef.current = setTimeout(() => {
-                  // 2 秒后如果还是 idle 状态，才更新
                   setChatStatus('idle')
                   setStatusVerb('')
+                  if (id) updateSessionStatus(id, 'idle')
                   idleStatusTimerRef.current = null
                 }, 2000)
               } else {
-                // 当前不是工作状态，直接更新
+                // 当前不是工作状态也不是 completed，直接更新
                 setChatStatus('idle')
                 setStatusVerb('')
+                updateSessionStatus(lastMessage.sessionId, 'idle')
               }
             } else if (newState === 'completed') {
               // completed 状态直接更新
@@ -440,7 +464,11 @@ export default function ChatScreen() {
               }
               setChatStatus('completed')
               setStatusVerb('')
+              updateSessionStatus(lastMessage.sessionId, 'completed')
             }
+          } else {
+            // 不是当前会话，直接更新全局状态
+            updateSessionStatus(lastMessage.sessionId, lastMessage.state as any)
           }
         } else if (lastMessage.state) {
           // 兼容旧格式：没有 sessionId，更新当前会话
@@ -521,6 +549,20 @@ export default function ChatScreen() {
         setChatStatus('idle')
         setStatusVerb('')
         break
+
+      case 'token_usage': {
+        // 收到上下文容量更新
+        if (lastMessage.percentage !== undefined) {
+          contextUsageRef.current = lastMessage.percentage
+          setContextUsage(Math.round(lastMessage.percentage))
+        } else if (lastMessage.used !== undefined && lastMessage.total !== undefined) {
+          // 如果提供的是具体数值，计算百分比
+          const percentage = (lastMessage.used / lastMessage.total) * 100
+          contextUsageRef.current = percentage
+          setContextUsage(Math.round(percentage))
+        }
+        break
+      }
     }
 
     clearLastMessage()
@@ -552,6 +594,9 @@ export default function ChatScreen() {
     setStreamingText('')
     setStreamingThinking('')
 
+    // Reset context usage for new message
+    resetContextUsage()
+
     // Set thinking status and record send time
     setChatStatus('thinking')
     setStatusVerb('Thinking')
@@ -559,7 +604,7 @@ export default function ChatScreen() {
 
     // Send to server
     send({ type: 'user_message', content: trimmedContent })
-  }, [id, addMessage, send])
+  }, [id, addMessage, send, resetContextUsage])
 
   const handleStop = useCallback(() => {
     console.log('[Chat] Stopping AI response')
@@ -729,10 +774,20 @@ export default function ChatScreen() {
         ]}>
           {chatStatus === 'completed' ? '已完成' : chatStatus !== 'idle' ? '工作中' : '等待中'}
         </Text>
+        {/* 上下文容量指示器 */}
+        {contextUsage > 0 && (
+          <View style={styles.contextRingContainer}>
+            <ContextRing
+              size={14}
+              strokeWidth={2}
+              percentage={contextUsage}
+            />
+          </View>
+        )}
         <View style={styles.statusSpacer} />
       </View>
     </View>
-  ), [session?.title, chatStatus, colors, dotOpacity])
+  ), [session?.title, chatStatus, colors, dotOpacity, contextUsage])
 
   return (
     <>
@@ -794,6 +849,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '500',
     textAlign: 'center',
+  },
+  contextRingContainer: {
+    marginLeft: 6,
   },
   listContent: { padding: 16, paddingBottom: 8 },
   scrollToBottom: {

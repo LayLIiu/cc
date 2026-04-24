@@ -321,16 +321,19 @@ export function useGlobalStatus() {
     const now = Date.now()
     const completedTimeout = 60 * 1000 // 1 分钟
 
-    for (const [sessionId, status] of Object.entries(sessionStatuses)) {
+    // 从 store 中获取最新状态，避免闭包问题
+    const { sessionStatuses: statuses, sessionStatusTimestamps: timestamps, updateSessionStatus: updateStatus } = useSessionStore.getState()
+
+    for (const [sessionId, status] of Object.entries(statuses)) {
       if (status === 'completed') {
-        const timestamp = sessionStatusTimestamps[sessionId] || 0
+        const timestamp = timestamps[sessionId] || 0
         if (now - timestamp > completedTimeout) {
-          console.log(`[GlobalStatus] Clearing completed status for ${sessionId}`)
-          updateSessionStatus(sessionId, 'idle')
+          console.log(`[GlobalStatus] Clearing completed status for ${sessionId}, age: ${Math.round((now - timestamp) / 1000)}s`)
+          updateStatus(sessionId, 'idle')
         }
       }
     }
-  }, [sessionStatuses, sessionStatusTimestamps, updateSessionStatus])
+  }, [])
 
   // 获取所有会话并订阅
   const subscribeAllSessions = useCallback(async () => {
@@ -371,6 +374,22 @@ export function useGlobalStatus() {
           const unsubscribe = wsManager.onMessage(session.id, (msg) => {
             console.log(`[GlobalStatus] Received message for ${session.id}:`, msg.type, msg.state)
 
+            // 获取当前打开的会话ID（如果有聊天页面打开的话，本地会处理，这里跳过）
+            const currentSessionId = useSessionStore.getState().currentSessionId
+            if (currentSessionId === session.id) {
+              // 当前会话由聊天页面处理，这里跳过大部分消息
+              // 但 message_complete 需要处理，因为聊天页面可能已经关闭
+              if (msg.type === 'message_complete') {
+                const timer = idleTimersRef.current.get(session.id)
+                if (timer) {
+                  clearTimeout(timer)
+                  idleTimersRef.current.delete(session.id)
+                }
+                updateSessionStatus(session.id, 'completed')
+              }
+              return
+            }
+
             if (msg.type === 'status' && msg.state) {
               const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
               const newState = msg.state
@@ -384,23 +403,26 @@ export function useGlobalStatus() {
                 }
                 updateSessionStatus(session.id, newState as any)
               } else if (newState === 'idle') {
-                // 如果当前是工作状态，延迟 2 秒再切换到 idle
+                // 获取当前状态
                 const currentStatuses = useSessionStore.getState().sessionStatuses
                 const currentStatus = currentStatuses[session.id]
-                if (workingStates.includes(currentStatus)) {
-                  // 清除之前的定时器
+
+                // 如果当前状态是 completed，忽略 idle 消息（让 1 分钟定时器处理）
+                if (currentStatus === 'completed') {
+                  console.log(`[GlobalStatus] Ignoring idle status for ${session.id} when in completed state`)
+                } else if (workingStates.includes(currentStatus)) {
+                  // 当前是工作状态，延迟 2 秒再切换到 idle
                   const existingTimer = idleTimersRef.current.get(session.id)
                   if (existingTimer) {
                     clearTimeout(existingTimer)
                   }
-                  // 设置新的延迟更新
                   const timer = setTimeout(() => {
                     updateSessionStatus(session.id, 'idle')
                     idleTimersRef.current.delete(session.id)
                   }, 2000)
                   idleTimersRef.current.set(session.id, timer)
                 } else {
-                  // 当前不是工作状态，直接更新
+                  // 当前不是工作状态也不是 completed，直接更新
                   updateSessionStatus(session.id, 'idle')
                 }
               } else if (newState === 'completed') {

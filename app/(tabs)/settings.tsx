@@ -7,8 +7,8 @@ import { useTheme } from '@/utils/theme'
 import AnimatedModal from '@/components/AnimatedModal'
 
 // 版本信息 - 每次修改后更新
-const APP_VERSION = '1.2.3'
-const BUILD_TIME = '2026-04-24 17:00'
+const APP_VERSION = '1.2.6'
+const BUILD_TIME = '2026-04-24 20:00'
 
 const THEME_OPTIONS: { mode: ThemeMode; label: string; icon: string }[] = [
   { mode: 'light', label: '浅色', icon: '☀️' },
