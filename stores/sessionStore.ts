@@ -58,6 +58,8 @@ type SessionState = {
   sessionStatusTimestamps: Record<string, number>
   // completed 状态的定时器引用（用于 1 分钟后自动清除）
   completedTimers: Record<string, ReturnType<typeof setTimeout>> // timerId 用于清理
+  // 上下文容量使用百分比（来自桌面端真实数据）
+  contextUsages: Record<string, number>
   // 加载状态
   isLoading: boolean
   isCreating: boolean
@@ -74,6 +76,7 @@ type SessionState = {
   clearStaleSessionStatuses: () => void
   clearCompletedTimer: (sessionId: string) => void
   setCompletedTimer: (sessionId: string, timerId: ReturnType<typeof setTimeout>) => void
+  setContextUsage: (sessionId: string, percentage: number) => void
   createSession: (workDir?: string) => Promise<string | null>
   deleteSession: (sessionId: string) => Promise<void>
   importSessions: (sessionIds: string[], sessionInfos?: Session[]) => Promise<number>
@@ -90,6 +93,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessionStatuses: {},
   sessionStatusTimestamps: {},
   completedTimers: {},
+  contextUsages: {},
   recentProjects: [],
   isLoading: false,
   isCreating: false,
@@ -113,7 +117,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }
       console.log('[Store] Filtered sessions:', filteredSessions.length)
-      set({ sessions: filteredSessions, isLoading: false })
+      // 清理 contextUsages：保留仅存在于当前会话列表中的条目
+      const validIds = new Set(filteredSessions.map(s => s!.id))
+      const cleanedContextUsages: Record<string, number> = {}
+      const existingUsages = get().contextUsages
+      for (const id of Object.keys(existingUsages)) {
+        if (validIds.has(id)) {
+          cleanedContextUsages[id] = existingUsages[id]
+        }
+      }
+      set({ sessions: filteredSessions, isLoading: false, contextUsages: cleanedContextUsages })
     } catch (err) {
       console.log('Sessions not available:', err instanceof Error ? err.message : 'unknown')
       set({
@@ -244,6 +257,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     })
   },
 
+  setContextUsage: (sessionId, percentage) => {
+    set((state) => ({
+      contextUsages: {
+        ...state.contextUsages,
+        [sessionId]: percentage,
+      },
+    }))
+  },
+
   // 清除超过 10 分钟未更新的状态（给桌面端足够长的时间完成思考）
   clearStaleSessionStatuses: () => {
     const now = Date.now()
@@ -253,6 +275,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const newStatuses: Record<string, SessionStatus> = {}
       const newTimestamps: Record<string, number> = {}
       const newTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+      const newContextUsages: Record<string, number> = {}
 
       for (const [sessionId, status] of Object.entries(state.sessionStatuses)) {
         const timestamp = state.sessionStatusTimestamps[sessionId] || 0
@@ -264,6 +287,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           if (state.completedTimers[sessionId]) {
             newTimers[sessionId] = state.completedTimers[sessionId]
           }
+          // 保留对应的上下文容量
+          if (state.contextUsages[sessionId] !== undefined) {
+            newContextUsages[sessionId] = state.contextUsages[sessionId]
+          }
         } else {
           // 清理过期状态时，同时清理对应的定时器
           const timer = state.completedTimers[sessionId]
@@ -273,10 +300,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }
 
+      // 保留 contextUsages 中未被 sessionStatuses 覆盖的条目
+      // （token_usage 消息可能在被 useGlobalStatus 接收到时，还没有对应的 sessionStatus）
+      for (const [sessionId, usage] of Object.entries(state.contextUsages)) {
+        if (newContextUsages[sessionId] === undefined) {
+          newContextUsages[sessionId] = usage
+        }
+      }
+
       return {
         sessionStatuses: newStatuses,
         sessionStatusTimestamps: newTimestamps,
         completedTimers: newTimers,
+        contextUsages: newContextUsages,
       }
     })
   },
@@ -306,12 +342,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const newSessions = state.sessions.filter(s => s?.id !== sessionId)
         const newMessages = { ...state.messages }
         const newMessageIds = { ...state.messageIds }
+        const newContextUsages = { ...state.contextUsages }
         delete newMessages[sessionId]
         delete newMessageIds[sessionId]
+        delete newContextUsages[sessionId]
         return {
           sessions: newSessions,
           messages: newMessages,
           messageIds: newMessageIds,
+          contextUsages: newContextUsages,
         }
       })
     } catch (err) {

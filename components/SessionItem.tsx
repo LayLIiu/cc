@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Animated, Modal, TextInput } 
 import { useTheme } from '@/utils/theme'
 import type { Session, SessionStatus } from '@/types/session'
 import PixelMascot from './shared/PixelMascot'
+import { ContextRing } from './shared/ContextRing'
 
 type SessionItemProps = {
   session: Session
@@ -11,6 +12,7 @@ type SessionItemProps = {
   onRename?: (sessionId: string, newTitle: string) => void
   isActive?: boolean
   status?: SessionStatus
+  contextUsage?: number
 }
 
 // Generate consistent random color from string
@@ -29,7 +31,7 @@ const generateColorFromString = (str: string): string => {
   return `hsl(${hue}, ${saturation}%, ${lightness}%)`
 }
 
-const SessionItemComponent = ({ session, onPress, onDelete, onRename, isActive, status = 'idle' }: SessionItemProps) => {
+const SessionItemComponent = ({ session, onPress, onDelete, onRename, isActive, status = 'idle', contextUsage }: SessionItemProps) => {
   const { colors } = useTheme()
   const [translateX] = useState(new Animated.Value(0))
   const [isSwipeOpen, setIsSwipeOpen] = useState(false)
@@ -193,6 +195,9 @@ const SessionItemComponent = ({ session, onPress, onDelete, onRename, isActive, 
                 <View style={[styles.statusBadge, { backgroundColor: colors.primary + '20' }]}>
                   <Text style={[styles.statusText, { color: colors.primary }]}>工作中</Text>
                 </View>
+              )}
+              {contextUsage !== undefined && contextUsage > 0 && (
+                <ContextRing size={14} strokeWidth={2} percentage={contextUsage} />
               )}
             </View>
 

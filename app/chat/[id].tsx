@@ -107,9 +107,14 @@ export default function ChatScreen() {
     options: string[]
   } | null>(null)
 
-  // 上下文容量使用百分比 (0-100)
-  const [contextUsage, setContextUsage] = useState(0)
-  const contextUsageRef = useRef(0) // 用于模拟数据累加
+  // 上下文容量使用百分比 (0-100)，从 store 初始化（保留上次的真实数据）
+  const [contextUsage, setContextUsage] = useState(() => {
+    if (id) {
+      const stored = useSessionStore.getState().contextUsages[id]
+      if (stored) return stored
+    }
+    return 0
+  })
 
   // 使用 ref 存储 WebSocket status 以避免闭包问题
   const statusRef = useRef(status)
@@ -164,28 +169,13 @@ export default function ChatScreen() {
   // 状态点闪烁动画
   const dotOpacity = useRef(new Animated.Value(1)).current
 
-  // 模拟上下文容量增加（当服务器端提供真实数据时会替换）
-  useEffect(() => {
-    const workingStates = ['thinking', 'tool_executing', 'streaming']
-    if (workingStates.includes(chatStatus)) {
-      // 每隔一段时间增加一点上下文使用量
-      const interval = setInterval(() => {
-        contextUsageRef.current = Math.min(100, contextUsageRef.current + Math.random() * 3 + 1)
-        setContextUsage(Math.round(contextUsageRef.current))
-      }, 2000)
-
-      return () => clearInterval(interval)
-    } else if (chatStatus === 'completed' || chatStatus === 'idle') {
-      // 完成或空闲时不重置，保持最后的使用量显示
-      // 可以在发送新消息时重置
-    }
-  }, [chatStatus])
-
   // 发送新消息时重置上下文使用量
   const resetContextUsage = useCallback(() => {
-    contextUsageRef.current = 0
     setContextUsage(0)
-  }, [])
+    if (id) {
+      useSessionStore.getState().setContextUsage(id, 0)
+    }
+  }, [id])
 
   useEffect(() => {
     if (chatStatus !== 'idle') {
@@ -270,6 +260,11 @@ export default function ChatScreen() {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
         }
+        // 更新状态为工作中
+        if (chatStatus === 'idle' || chatStatus === 'completed') {
+          setChatStatus('streaming')
+          if (id) updateSessionStatus(id, 'streaming')
+        }
 
         if (lastMessage.blockType === 'text') {
           streamState.inTextBlock = true
@@ -290,6 +285,11 @@ export default function ChatScreen() {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
         }
+        // 更新状态为工作中
+        if (chatStatus === 'idle' || chatStatus === 'completed') {
+          setChatStatus('streaming')
+          if (id) updateSessionStatus(id, 'streaming')
+        }
         if (lastMessage.text) {
           streamState.textBuffer += lastMessage.text
           setStreamingText(streamState.textBuffer)
@@ -308,6 +308,11 @@ export default function ChatScreen() {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
         }
+        // 更新状态为思考中
+        if (chatStatus === 'idle' || chatStatus === 'completed') {
+          setChatStatus('thinking')
+          if (id) updateSessionStatus(id, 'thinking')
+        }
 
         if (!streamState.inThinkingBlock) {
           streamState.inThinkingBlock = true
@@ -323,6 +328,11 @@ export default function ChatScreen() {
         if (idleStatusTimerRef.current) {
           clearTimeout(idleStatusTimerRef.current)
           idleStatusTimerRef.current = null
+        }
+        // 更新状态为工具执行中
+        if (chatStatus === 'idle' || chatStatus === 'completed') {
+          setChatStatus('tool_executing')
+          if (id) updateSessionStatus(id, 'tool_executing')
         }
 
         const toolUseId = lastMessage.toolUseId || `tool-${Date.now()}`
@@ -368,6 +378,11 @@ export default function ChatScreen() {
       }
 
       case 'tool_result': {
+        // 工具执行完成但对话仍在继续，保持工作状态
+        if (chatStatus === 'idle' || chatStatus === 'completed') {
+          setChatStatus('tool_executing')
+          if (id) updateSessionStatus(id, 'tool_executing')
+        }
         const toolUseId = lastMessage.toolUseId
         if (id && toolUseId) {
           const resultContent = lastMessage.content
@@ -433,8 +448,9 @@ export default function ChatScreen() {
 
         // 设置 1 分钟后自动清除 completed 状态
         completedStatusTimerRef.current = setTimeout(() => {
-          // 再次检查状态，确保没有新的工作状态
-          if (chatStatus === 'completed') {
+          // 使用 store 读取最新状态，避免闭包陈旧值
+          const latestStatus = useSessionStore.getState().sessionStatuses[id!]
+          if (latestStatus === 'completed') {
             setChatStatus('idle')
             setStatusVerb('')
             if (id) updateSessionStatus(id, 'idle')
@@ -457,7 +473,7 @@ export default function ChatScreen() {
         if (lastMessage.sessionId && lastMessage.state) {
           // 如果是当前会话，处理状态更新
           if (lastMessage.sessionId === id) {
-            const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
+            const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending', 'question_pending']
             const newState = lastMessage.state
 
             // 如果收到工作状态，立即更新并清除所有待处理的定时器
@@ -516,8 +532,9 @@ export default function ChatScreen() {
 
               // 设置 1 分钟后自动清除 completed 状态
               completedStatusTimerRef.current = setTimeout(() => {
-                // 再次检查状态，确保没有新的工作状态
-                if (chatStatus === 'completed') {
+                // 使用 store 读取最新状态，避免闭包陈旧值
+                const latestStatus = useSessionStore.getState().sessionStatuses[id!]
+                if (latestStatus === 'completed') {
                   setChatStatus('idle')
                   setStatusVerb('')
                   if (id) updateSessionStatus(id, 'idle')
@@ -614,15 +631,19 @@ export default function ChatScreen() {
         break
 
       case 'token_usage': {
-        // 收到上下文容量更新
+        // 收到桌面端上下文容量更新
+        let percentage = 0
         if (lastMessage.percentage !== undefined) {
-          contextUsageRef.current = lastMessage.percentage
-          setContextUsage(Math.round(lastMessage.percentage))
+          percentage = lastMessage.percentage
         } else if (lastMessage.used !== undefined && lastMessage.total !== undefined) {
-          // 如果提供的是具体数值，计算百分比
-          const percentage = (lastMessage.used / lastMessage.total) * 100
-          contextUsageRef.current = percentage
+          percentage = (lastMessage.used / lastMessage.total) * 100
+        }
+        if (percentage > 0) {
           setContextUsage(Math.round(percentage))
+          // 同步更新 store，让会话列表也能显示
+          if (id) {
+            useSessionStore.getState().setContextUsage(id, Math.round(percentage))
+          }
         }
         break
       }
@@ -705,7 +726,7 @@ export default function ChatScreen() {
       ...(always ? { rule: 'always' } : {}),
     })
     setPermissionRequest(null)
-    // Resume previous status
+    // Set thinking as temporary status — server will push the real state soon
     setChatStatus('thinking')
     setStatusVerb('Thinking')
   }, [send])
@@ -718,6 +739,7 @@ export default function ChatScreen() {
       allowed: false,
     })
     setPermissionRequest(null)
+    // Set thinking as temporary status — server will push the real state soon
     setChatStatus('thinking')
     setStatusVerb('Thinking')
   }, [send])
@@ -730,6 +752,7 @@ export default function ChatScreen() {
       answer,
     })
     setQuestionRequest(null)
+    // Set thinking as temporary status — server will push the real state soon
     setChatStatus('thinking')
     setStatusVerb('Thinking')
   }, [send])

@@ -418,8 +418,8 @@ export function useGlobalStatus() {
             // 获取当前打开的会话ID（如果有聊天页面打开的话，本地会处理，这里跳过）
             const currentSessionId = useSessionStore.getState().currentSessionId
             if (currentSessionId === session.id) {
-              // 当前会话由聊天页面处理，这里跳过大部分消息
-              // 但 message_complete 需要处理，因为聊天页面可能已经关闭
+              // 当前会话由聊天页面处理，这里只处理 message_complete
+              // 其他状态由聊天页面的 chatStatus 管理
               if (msg.type === 'message_complete') {
                 clearAllTimersForSession(session.id)
                 updateSessionStatus(session.id, 'completed')
@@ -435,8 +435,42 @@ export function useGlobalStatus() {
               return
             }
 
+            // --- 以下处理非当前会话的状态 ---
+
+            // 流式内容消息也表明会话正在工作中
+            // 桌面端在思考/执行工具时主要发送这些消息而非 status 消息
+            // 如果不处理这些消息，移动端在会话列表中看不到"工作中"状态
+            // 重要：只在状态实际需要变化时才更新，避免 content_delta 大量涌入时
+            // 每条都触发 store 更新导致 UI 卡死
+            if (msg.type === 'content_start' || msg.type === 'content_delta') {
+              const currentStatus = useSessionStore.getState().sessionStatuses[session.id]
+              if (currentStatus !== 'streaming') {
+                clearAllTimersForSession(session.id)
+                updateSessionStatus(session.id, 'streaming')
+              }
+              return
+            }
+
+            if (msg.type === 'thinking') {
+              const currentStatus = useSessionStore.getState().sessionStatuses[session.id]
+              if (currentStatus !== 'thinking') {
+                clearAllTimersForSession(session.id)
+                updateSessionStatus(session.id, 'thinking')
+              }
+              return
+            }
+
+            if (msg.type === 'tool_use_complete' || msg.type === 'tool_result') {
+              const currentStatus = useSessionStore.getState().sessionStatuses[session.id]
+              if (currentStatus !== 'tool_executing') {
+                clearAllTimersForSession(session.id)
+                updateSessionStatus(session.id, 'tool_executing')
+              }
+              return
+            }
+
             if (msg.type === 'status' && msg.state) {
-              const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending']
+              const workingStates = ['thinking', 'tool_executing', 'streaming', 'permission_pending', 'question_pending']
               const newState = msg.state
 
               // 如果收到工作状态，立即更新并清除所有定时器
@@ -501,12 +535,23 @@ export function useGlobalStatus() {
                 }
               }, 60000) as unknown as number
               setCompletedTimer(session.id, timerId)
+            } else if (msg.type === 'token_usage') {
+              // 收到桌面端上下文容量更新，更新 store 让会话列表也能显示
+              let percentage = 0
+              if (msg.percentage !== undefined) {
+                percentage = msg.percentage
+              } else if (msg.used !== undefined && msg.total !== undefined) {
+                percentage = (msg.used / msg.total) * 100
+              }
+              if (percentage > 0) {
+                useSessionStore.getState().setContextUsage(session.id, Math.round(percentage))
+              }
             }
           })
           unsubscribesRef.current.set(session.id, unsubscribe)
 
-          // 连接建立后请求当前状态（仅一次，不使用重试）
-          wsManager.send(session.id, { type: 'get_status' })
+          // 连接建立后请求当前状态，使用重试确保在 WebSocket ready 后发送
+          wsManager.sendWithRetry(session.id, { type: 'get_status' }, 3)
         }
       }
     } catch (e) {

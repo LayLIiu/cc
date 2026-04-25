@@ -4,6 +4,18 @@ import { useTheme } from '@/utils/theme'
 // 版本更新日志
 const CHANGELOG = [
   {
+    version: '1.3.0',
+    date: '2026-04-25',
+    changes: [
+      '新增配对码生成功能，快速连接桌面端',
+      '新增网络信息显示（局域网 IP、隧道状态）',
+      '新增隧道开关请求（远程开启/关闭公网访问）',
+      '新增问题选择功能，支持选项和文字回答',
+      '修复公网隧道连接 CORS 被拒问题',
+      '优化 API 路径统一使用 /api/mobile/ 前缀',
+    ],
+  },
+  {
     version: '1.2.6',
     date: '2026-04-24',
     changes: [

@@ -58,9 +58,6 @@ export default function SettingsScreen() {
 
       const response = await fetch(`${serverUrl}/api/sessions`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
         signal: controller.signal,
       })
 
@@ -68,10 +65,12 @@ export default function SettingsScreen() {
       const end = Date.now()
       const duration = end - start
 
-      if (response.ok || response.status === 401) {
+      if (response.ok) {
         setLatency(duration)
       } else {
-        setLatency(-1)
+        const errorBody = await response.text().catch(() => '')
+        console.log(`[Settings] Connection test failed: HTTP ${response.status}`, errorBody.slice(0, 200))
+        setLatency(-1 * response.status) // Negative status code as diagnostic
       }
     } catch (err: any) {
       console.log('Latency test error:', err)
@@ -83,7 +82,8 @@ export default function SettingsScreen() {
 
   // 格式化延迟显示
   const formatLatency = (ms: number) => {
-    if (ms < 0) return '连接失败'
+    if (ms <= -100) return `HTTP ${Math.abs(ms)} 错误`
+    if (ms === -1) return '连接失败'
     if (ms < 100) return `${ms}ms (极快)`
     if (ms < 300) return `${ms}ms (很快)`
     if (ms < 500) return `${ms}ms (较快)`

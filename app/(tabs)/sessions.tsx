@@ -25,6 +25,7 @@ export default function SessionsScreen() {
   const {
     sessions,
     sessionStatuses,
+    contextUsages,
     recentProjects,
     isLoading,
     isCreating,
@@ -200,6 +201,7 @@ export default function SessionsScreen() {
                   <SessionItem
                     session={session}
                     status={session?.id ? sessionStatuses[session.id] : undefined}
+                    contextUsage={session?.id ? contextUsages[session.id] : undefined}
                     onPress={() => session?.id && handleSessionPress(session.id)}
                     onDelete={() => session?.id && handleDeleteSession(session.id)}
                     onRename={handleRenameSession}

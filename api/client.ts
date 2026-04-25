@@ -20,22 +20,41 @@ export type RecentProject = {
 }
 
 class ApiClient {
+  constructor() {
+    // Log the initial server URL for debugging connectivity issues
+    try {
+      const base = this.getBaseUrl()
+      console.log('[API] ApiClient initialized with serverUrl:', base)
+    } catch (e) {
+      console.log('[API] ApiClient initialization error:', (e as any)?.message)
+    }
+  }
   private getBaseUrl(): string {
-    return useAuthStore.getState().serverUrl
+    const url = useAuthStore.getState().serverUrl
+    if (!url) {
+      console.log('[API] getBaseUrl -> no serverUrl configured')
+    }
+    return url.replace(/\/+$/, '')
   }
 
   private async safeFetch(url: string, options?: RequestInit): Promise<Response> {
+    console.log('[API] Attempting URL:', url, 'method:', options?.method || 'GET')
     try {
+      const hasBody = options?.body != null
+      const headers: Record<string, string> = {
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        ...options?.headers as Record<string, string>,
+      }
       const response = await fetch(url, {
         ...options,
-        headers: {
-          'Content-Type': 'application/json',
-          ...options?.headers,
-        },
+        headers,
       })
+      console.log('[API] Response status:', response.status, 'for', url)
       return response
     } catch (err) {
-      throw new Error(`无法连接服务器，请检查服务器地址是否正确`)
+      const msg = (err as any)?.message ?? '网络请求失败'
+      console.log('[API] SafeFetch error:', msg, 'for', url)
+      throw new Error(`无法连接服务器，请检查服务器地址是否正确（URL: ${url}，错误：${msg}）`)
     }
   }
 
@@ -47,8 +66,8 @@ class ApiClient {
       console.log('[API] Sessions response status:', response.status)
       if (!response.ok) {
         const errorText = await response.text()
-        console.log('[API] Sessions error:', errorText)
-        throw new Error('获取会话列表失败')
+        console.log('[API] Sessions error:', response.status, errorText)
+        throw new Error(`获取会话列表失败 (HTTP ${response.status}: ${errorText.slice(0, 200)})`)
       }
       const data = await response.json()
       console.log('[API] Sessions count:', data.sessions?.length || 0)
@@ -419,7 +438,13 @@ class ApiClient {
 
   // Pairing code and network settings API
   async getPairingCode(): Promise<{ pairingCode: string; expiresAt: number; createdAt: number }> {
-    const response = await this.safeFetch(`${this.getBaseUrl()}/api/mobile/pairing-code`, {
+    // 尝试多路径兼容性，兼容后端可能的路径变更（如 dash-/camelCase 等变体）
+    const base = this.getBaseUrl()
+    const urls = [
+      `${base}/api/mobile/pairing-code`,
+      `${base}/api/mobile/pairingCode`,
+    ]
+    const response = await this.fetchWithFallback(urls, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ttlHours: 1 }),
@@ -435,7 +460,13 @@ class ApiClient {
   }
 
   async getNetworkInfo(): Promise<{ lanUrl: string | null; tunnelUrl: string | null; tunnelEnabled: boolean; serverPort: number }> {
-    const response = await this.safeFetch(`${this.getBaseUrl()}/api/mobile/network-info`)
+    // 尝试多路径兼容性，覆盖可能的 API 路径变体
+    const base = this.getBaseUrl()
+    const urls = [
+      `${base}/api/mobile/network-info`,
+      `${base}/api/mobile/networkInfo`,
+    ]
+    const response = await this.fetchWithFallback(urls)
     if (response.status === 404) {
       return { lanUrl: null, tunnelUrl: null, tunnelEnabled: false, serverPort: 0 }
     }
@@ -447,7 +478,13 @@ class ApiClient {
   }
 
   async enableTunnel(enabled: boolean): Promise<{ ok: boolean; tunnelUrl?: string; error?: string }> {
-    const response = await this.safeFetch(`${this.getBaseUrl()}/api/mobile/tunnel`, {
+    // 尝试多路径兼容性，以应对后端 API 变更导致的 404 情况
+    const base = this.getBaseUrl()
+    const urls = [
+      `${base}/api/mobile/tunnel`,
+      `${base}/api/mobile/tunnel/enable`,
+    ]
+    const response = await this.fetchWithFallback(urls, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
@@ -460,6 +497,23 @@ class ApiClient {
       throw new Error(error.message || '设置隧道失败')
     }
     return response.json()
+  }
+
+  // 多路径请求支持：按顺序尝试提供的 URL，直到其中一个成功或返回非 404
+  private async fetchWithFallback(urls: string[], options?: RequestInit): Promise<Response> {
+    for (let i = 0; i < urls.length; i++) {
+      try {
+        const res = await this.safeFetch(urls[i], options)
+        // 如果请求成功，直接返回；若是 404 继续尝试下一个路径
+        if (res.ok || res.status !== 404) return res
+      } catch (err) {
+        // 尝试下一个 URL
+        continue
+      }
+    }
+    // 所有路径均失败时，返回最后一次请求的响应或一个新的错误
+    // 这里返回最后一次的错误状态以便调用方处理
+    return await this.safeFetch(urls[urls.length - 1], options)
   }
 }
 
