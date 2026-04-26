@@ -23,6 +23,20 @@ class SessionStore: ObservableObject {
     // 最近项目
     @Published var recentProjects: [RecentProject] = []
 
+    // WebSocket 服务
+    private var webSocketService = WebSocketService.shared
+    private var cancellables = Set<AnyCancellable>()
+
+    // 本地存储目录
+    private let messagesDirectory: URL = {
+        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        let messagesDir = paths[0].appendingPathComponent("messages", isDirectory: true)
+        if !FileManager.default.fileExists(atPath: messagesDir.path) {
+            try? FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+        }
+        return messagesDir
+    }()
+
     // 当前会话
     var currentSession: Session? {
         guard let id = currentSessionId else { return nil }
@@ -43,10 +57,16 @@ class SessionStore: ObservableObject {
             ("更早", [])
         ]
 
-        let sortedSessions = sessions.sorted { $0.modifiedAt > $1.modifiedAt }
+        // 解析时间戳并排序
+        let sortedSessions = sessions.sorted { s1, s2 in
+            let date1 = parseTimestamp(s1.modifiedAt)
+            let date2 = parseTimestamp(s2.modifiedAt)
+            return date1 > date2
+        }
 
         for session in sortedSessions {
-            let sessionDay = calendar.startOfDay(for: session.modifiedAt)
+            let sessionDate = parseTimestamp(session.modifiedAt)
+            let sessionDay = calendar.startOfDay(for: sessionDate)
             if sessionDay >= today {
                 groups[0].1.append(session)
             } else if sessionDay >= yesterday {
@@ -61,129 +81,344 @@ class SessionStore: ObservableObject {
         return groups.filter { !$0.1.isEmpty }
     }
 
+    private func parseTimestamp(_ timestamp: String) -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: timestamp) ?? Date.distantPast
+    }
+
     init() {
         // 加载保存的会话数据
         loadSavedData()
+
+        // 监听 WebSocket 消息 - 实时推送到对应会话
+        webSocketService.$lastMessage
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in
+                guard let message = message else { return }
+                self?.handleWebSocketMessage(message)
+            }
+            .store(in: &cancellables)
     }
 
     private func loadSavedData() {
-        // 从 UserDefaults 或文件加载会话数据
+        // 从 UserDefaults 加载会话数据
         if let data = UserDefaults.standard.data(forKey: "sessions"),
            let saved = try? JSONDecoder().decode([Session].self, from: data) {
             self.sessions = saved
-        } else {
-            // 首次启动，加载示例数据
-            loadMockData()
+
+            // 预加载所有会话的本地消息到内存
+            for session in saved {
+                if let localMessages = loadMessagesFromLocal(session.id) {
+                    messages[session.id] = localMessages
+                }
+            }
+            print("[SessionStore] ✅ Preloaded messages for \(saved.count) sessions")
         }
-    }
-
-    private func loadMockData() {
-        let calendar = Calendar.current
-        let now = Date()
-
-        // 今天的会话
-        let today1 = Session(
-            id: "session-1",
-            title: "修复登录页面样式问题",
-            projectPath: "~/projects/my-app",
-            createdAt: calendar.date(byAdding: .hour, value: -2, to: now)!,
-            modifiedAt: calendar.date(byAdding: .minute, value: -30, to: now)!,
-            messageCount: 15
-        )
-
-        let today2 = Session(
-            id: "session-2",
-            title: "添加用户认证功能",
-            projectPath: "~/projects/backend-api",
-            createdAt: calendar.date(byAdding: .hour, value: -5, to: now)!,
-            modifiedAt: calendar.date(byAdding: .hour, value: -1, to: now)!,
-            messageCount: 28
-        )
-
-        // 昨天的会话
-        let yesterday1 = Session(
-            id: "session-3",
-            title: "优化数据库查询性能",
-            projectPath: "~/projects/data-service",
-            createdAt: calendar.date(byAdding: .day, value: -1, to: now)!,
-            modifiedAt: calendar.date(byAdding: .day, value: -1, to: now)!,
-            messageCount: 42
-        )
-
-        let yesterday2 = Session(
-            id: "session-4",
-            title: "实现文件上传功能",
-            projectPath: "~/projects/storage-module",
-            createdAt: calendar.date(byAdding: .hour, value: -30, to: now)!,
-            modifiedAt: calendar.date(byAdding: .hour, value: -28, to: now)!,
-            messageCount: 19
-        )
-
-        // 前天的会话
-        let dayBefore1 = Session(
-            id: "session-5",
-            title: "重构 API 响应处理",
-            projectPath: "~/projects/api-gateway",
-            createdAt: calendar.date(byAdding: .day, value: -2, to: now)!,
-            modifiedAt: calendar.date(byAdding: .day, value: -2, to: now)!,
-            messageCount: 33
-        )
-
-        let dayBefore2 = Session(
-            id: "session-6",
-            title: "添加单元测试覆盖",
-            projectPath: "~/projects/core-lib",
-            createdAt: calendar.date(byAdding: .hour, value: -60, to: now)!,
-            modifiedAt: calendar.date(byAdding: .hour, value: -55, to: now)!,
-            messageCount: 12
-        )
-
-        let dayBefore3 = Session(
-            id: "session-7",
-            title: "修复内存泄漏问题",
-            projectPath: "~/projects/mobile-app",
-            createdAt: calendar.date(byAdding: .hour, value: -58, to: now)!,
-            modifiedAt: calendar.date(byAdding: .hour, value: -56, to: now)!,
-            messageCount: 8
-        )
-
-        sessions = [today1, today2, yesterday1, yesterday2, dayBefore1, dayBefore2, dayBefore3]
-
-        // 添加示例消息
-        messages["session-1"] = [
-            Message(id: "m1", type: .userText, content: "帮我修复登录页面的样式问题，按钮在深色模式下显示不正确", timestamp: Date()),
-            Message(id: "m2", type: .assistantText, content: "我来帮你检查登录页面的样式问题。让我先看一下相关的代码文件。", timestamp: Date()),
-            Message(id: "m3", type: .toolUse, content: "", timestamp: Date(), toolName: "Read", toolStatus: .completed),
-            Message(id: "m4", type: .assistantText, content: "我发现了问题所在。在 `LoginView.swift` 中，按钮颜色使用了固定的浅色值，没有根据颜色模式动态调整。\n\n建议修改如下：\n\n```swift\nButton {\n    login()\n} label: {\n    Text(\"登录\")\n        .foregroundColor(.white)\n        .frame(maxWidth: .infinity)\n        .padding()\n        .background(Color.adaptivePrimary) // 使用动态颜色\n        .cornerRadius(12)\n}\n```\n\n这样按钮在深色模式下也会正确显示。", timestamp: Date()),
-        ]
-
-        messages["session-2"] = [
-            Message(id: "m5", type: .userText, content: "我需要添加 JWT 认证功能，包括登录、注册和 token 刷新", timestamp: Date()),
-            Message(id: "m6", type: .assistantText, content: "好的，我来帮你实现 JWT 认证系统。需要以下步骤：\n\n1. 安装必要的依赖\n2. 创建认证中间件\n3. 实现登录/注册接口\n4. 添加 token 刷新机制\n\n让我先检查一下项目的当前结构。", timestamp: Date()),
-            Message(id: "m7", type: .toolUse, content: "", timestamp: Date(), toolName: "Glob", toolStatus: .completed),
-        ]
-
-        messages["session-3"] = [
-            Message(id: "m8", type: .userText, content: "数据库查询太慢了，需要优化", timestamp: Date()),
-            Message(id: "m9", type: .thinking, content: "分析当前查询结构，检查索引配置...", timestamp: Date()),
-            Message(id: "m10", type: .assistantText, content: "我分析了你的查询，发现以下问题：\n\n1. `users` 表缺少 `email` 字段的索引\n2. 订单查询没有使用复合索引\n3. 存在 N+1 查询问题\n\n建议添加以下索引：\n\n```sql\nCREATE INDEX idx_users_email ON users(email);\nCREATE INDEX idx_orders_user_status ON orders(user_id, status);\n```", timestamp: Date()),
-        ]
-
-        // 添加状态和上下文使用率
-        sessionStatuses["session-1"] = .completed
-        sessionStatuses["session-2"] = .completed
-        sessionStatuses["session-3"] = .completed
-        sessionStatuses["session-4"] = .thinking  // 工作中
-
-        contextUsages["session-1"] = 35
-        contextUsages["session-2"] = 68
-        contextUsages["session-3"] = 82
     }
 
     private func saveSessions() {
         if let data = try? JSONEncoder().encode(sessions) {
             UserDefaults.standard.set(data, forKey: "sessions")
         }
+    }
+
+    // MARK: - 本地消息存储
+
+    private func messagesFilePath(for sessionId: String) -> URL {
+        return messagesDirectory.appendingPathComponent("\(sessionId).json")
+    }
+
+    func saveMessagesToLocal(_ sessionId: String) {
+        guard let sessionMessages = messages[sessionId], !sessionMessages.isEmpty else { return }
+        let url = messagesFilePath(for: sessionId)
+        if let data = try? JSONEncoder().encode(sessionMessages) {
+            try? data.write(to: url)
+            print("[SessionStore] Saved \(sessionMessages.count) messages to local for session \(sessionId)")
+        }
+    }
+
+    func loadMessagesFromLocal(_ sessionId: String) -> [Message]? {
+        let url = messagesFilePath(for: sessionId)
+        guard let data = try? Data(contentsOf: url),
+              let saved = try? JSONDecoder().decode([Message].self, from: data) else {
+            return nil
+        }
+        print("[SessionStore] Loaded \(saved.count) messages from local for session \(sessionId)")
+        return saved
+    }
+
+    // MARK: - WebSocket 消息处理 - 实时推送到对应会话
+
+    private func handleWebSocketMessage(_ wsMessage: WSMessage) {
+        // 使用消息中的 sessionId，如果没有则使用当前会话
+        let targetSessionId = wsMessage.sessionId ?? currentSessionId
+
+        print("[SessionStore] 📩 WS msg: \(wsMessage.type), sessionId in msg: \(wsMessage.sessionId ?? "nil"), currentSessionId: \(currentSessionId ?? "nil"), target: \(targetSessionId ?? "nil")")
+
+        guard let sessionId = targetSessionId else {
+            print("[SessionStore] ⚠️ No session ID for message, skipping")
+            return
+        }
+
+        switch wsMessage.type {
+        case .contentStart:
+            print("[SessionStore] ▶️ Content start, blockType: \(wsMessage.blockType ?? "nil")")
+            // 如果是助手消息开始，先清理流式状态
+            if wsMessage.blockType == "text" || wsMessage.blockType == nil {
+                sessionStatuses[sessionId] = .streaming
+            }
+
+        case .contentDelta:
+            if let text = wsMessage.text {
+                print("[SessionStore] 📝 Content delta: \(text.prefix(30))...")
+                appendStreamingText(sessionId, text)
+            }
+
+        case .thinking:
+            if let text = wsMessage.text {
+                print("[SessionStore] 🧠 Thinking: \(text.prefix(30))...")
+                updateThinkingContent(sessionId, text)
+            }
+
+        case .toolUseComplete:
+            if let toolName = wsMessage.toolName {
+                print("[SessionStore] 🔧 Tool complete: \(toolName)")
+                addToolUseMessage(sessionId, toolName, wsMessage.toolUseId, wsMessage.input, .completed)
+            }
+
+        case .toolResult:
+            if let toolUseId = wsMessage.toolUseId,
+               let content = wsMessage.content {
+                print("[SessionStore] 🔧 Tool result for: \(toolUseId)")
+                updateToolResult(sessionId, toolUseId, content)
+            }
+
+        case .messageComplete:
+            print("[SessionStore] ✅ Message complete for session \(sessionId)")
+            sessionStatuses[sessionId] = .completed
+            // 消息完成时保存到本地
+            saveMessagesToLocal(sessionId)
+
+        case .status:
+            if let state = wsMessage.state {
+                print("[SessionStore] 📊 Status: \(state) for session \(sessionId)")
+                updateSessionStatusFromState(sessionId, state)
+            }
+
+        case .permissionRequest:
+            if let requestId = wsMessage.requestId {
+                print("[SessionStore] 🔐 Permission request: \(wsMessage.toolName ?? "unknown")")
+                addPermissionRequestMessage(sessionId, requestId, wsMessage.toolName ?? "", wsMessage.description)
+            }
+
+        case .question:
+            if let questionId = wsMessage.questionId {
+                print("[SessionStore] ❓ Question: \(wsMessage.questionText ?? "")")
+                addQuestionMessage(sessionId, questionId, wsMessage.questionText ?? "", wsMessage.options ?? [])
+            }
+
+        case .error:
+            if let text = wsMessage.text {
+                print("[SessionStore] ❌ Error: \(text)")
+                self.error = text
+            }
+
+        case .tokenUsage:
+            if let percentage = wsMessage.percentage {
+                contextUsages[sessionId] = Int(percentage * 100)
+            }
+
+        case .sessionTitleUpdated:
+            if let title = wsMessage.title {
+                updateSessionTitle(sessionId, title)
+            }
+
+        case .connected:
+            print("[SessionStore] 🔗 WebSocket connected")
+
+        case .userMessageEcho:
+            // 用户消息回显 - 添加到对应会话
+            if let contentValue = wsMessage.content?.value {
+                let contentString: String
+                if let str = contentValue as? String {
+                    contentString = str
+                } else {
+                    contentString = String(describing: contentValue)
+                }
+                print("[SessionStore] 👤 User message echo: \(contentString.prefix(50))")
+                let userMessage = Message(
+                    id: wsMessage.id ?? "user-\(UUID().uuidString)",
+                    type: .userText,
+                    content: contentString,
+                    timestamp: wsMessage.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                )
+                addMessage(sessionId, userMessage)
+                saveMessagesToLocal(sessionId)
+            }
+        }
+    }
+
+    private func appendStreamingText(_ sessionId: String, _ text: String) {
+        var sessionMessages = messages[sessionId] ?? []
+
+        // 查找最后一条助手消息
+        if let lastIndex = sessionMessages.indices.last,
+           sessionMessages[lastIndex].type == .assistantText {
+
+            let msg = sessionMessages[lastIndex]
+            let updatedMsg = Message(
+                id: msg.id,
+                type: msg.type,
+                content: msg.content + text,
+                timestamp: msg.timestamp,
+                toolName: msg.toolName,
+                toolInput: msg.toolInput,
+                toolResult: msg.toolResult,
+                toolStatus: msg.toolStatus
+            )
+            sessionMessages[lastIndex] = updatedMsg
+        } else {
+            // 创建新的助手消息
+            let newMessage = Message(
+                id: "assistant-\(UUID().uuidString)",
+                type: .assistantText,
+                content: text,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+            sessionMessages.append(newMessage)
+        }
+
+        // 强制触发 UI 更新
+        messages[sessionId] = sessionMessages
+    }
+
+    private func updateThinkingContent(_ sessionId: String, _ text: String) {
+        var sessionMessages = messages[sessionId] ?? []
+
+        // 查找最后一条思考消息
+        if let lastIndex = sessionMessages.indices.last,
+           sessionMessages[lastIndex].type == .thinking {
+
+            let msg = sessionMessages[lastIndex]
+            let updatedMsg = Message(
+                id: msg.id,
+                type: msg.type,
+                content: msg.content + text,
+                timestamp: msg.timestamp,
+                toolName: msg.toolName,
+                toolInput: msg.toolInput,
+                toolResult: msg.toolResult,
+                toolStatus: msg.toolStatus
+            )
+            sessionMessages[lastIndex] = updatedMsg
+        } else {
+            // 创建新的思考消息
+            let newMessage = Message(
+                id: "thinking-\(UUID().uuidString)",
+                type: .thinking,
+                content: text,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+            sessionMessages.append(newMessage)
+        }
+
+        // 强制触发 UI 更新
+        messages[sessionId] = sessionMessages
+    }
+
+    private func addToolUseMessage(_ sessionId: String, _ toolName: String, _ toolUseId: String?, _ input: [String: AnyCodable]?, _ status: ToolStatus) {
+        let message = Message(
+            id: toolUseId ?? UUID().uuidString,
+            type: .toolUse,
+            content: "",
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            toolName: toolName,
+            toolInput: input,
+            toolResult: nil,
+            toolStatus: status
+        )
+
+        var sessionMessages = messages[sessionId] ?? []
+        sessionMessages.append(message)
+        messages[sessionId] = sessionMessages
+    }
+
+    private func updateToolResult(_ sessionId: String, _ toolUseId: String, _ content: AnyCodable) {
+        var sessionMessages = messages[sessionId] ?? []
+        guard let index = sessionMessages.firstIndex(where: { $0.id == toolUseId }) else { return }
+
+        let msg = sessionMessages[index]
+        let resultString: String
+        if let str = content.value as? String {
+            resultString = str
+        } else if let data = try? JSONEncoder().encode(AnyCodable(value: content.value)),
+                  let str = String(data: data, encoding: .utf8) {
+            resultString = str
+        } else {
+            resultString = String(describing: content.value)
+        }
+
+        let updatedMsg = Message(
+            id: msg.id,
+            type: msg.type,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            toolName: msg.toolName,
+            toolInput: msg.toolInput,
+            toolResult: resultString,
+            toolStatus: .completed
+        )
+        sessionMessages[index] = updatedMsg
+        messages[sessionId] = sessionMessages
+    }
+
+    private func updateSessionStatusFromState(_ sessionId: String, _ state: String) {
+        switch state {
+        case "idle":
+            sessionStatuses[sessionId] = .idle
+        case "thinking":
+            sessionStatuses[sessionId] = .thinking
+        case "streaming":
+            sessionStatuses[sessionId] = .streaming
+        case "tool_executing":
+            sessionStatuses[sessionId] = .toolExecuting
+        case "permission_pending":
+            sessionStatuses[sessionId] = .permissionPending
+        case "question_pending":
+            sessionStatuses[sessionId] = .questionPending
+        case "completed":
+            sessionStatuses[sessionId] = .completed
+        default:
+            break
+        }
+    }
+
+    private func addPermissionRequestMessage(_ sessionId: String, _ requestId: String, _ toolName: String, _ description: String?) {
+        let message = Message(
+            id: "permission-\(requestId)",
+            type: .userText,
+            content: description ?? "权限请求: \(toolName)",
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            toolName: toolName,
+            permissionId: requestId,
+            permissionDescription: description
+        )
+        addMessage(sessionId, message)
+        sessionStatuses[sessionId] = .permissionPending
+    }
+
+    private func addQuestionMessage(_ sessionId: String, _ questionId: String, _ questionText: String, _ options: [String]) {
+        let message = Message(
+            id: "question-\(questionId)",
+            type: .userText,
+            content: questionText,
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            questionId: questionId,
+            options: options
+        )
+        addMessage(sessionId, message)
+        sessionStatuses[sessionId] = .questionPending
     }
 
     // MARK: - API 操作
@@ -194,10 +429,9 @@ class SessionStore: ObservableObject {
         error = nil
 
         do {
-            // TODO: 调用 API 获取会话列表
-            // let fetched = try await APIService.shared.getSessions()
-            // sessions = fetched
-
+            let fetched = try await APIService.shared.getSessions()
+            sessions = fetched
+            saveSessions()
             isLoading = false
         } catch {
             self.error = error.localizedDescription
@@ -210,14 +444,10 @@ class SessionStore: ObservableObject {
         isCreating = true
 
         do {
-            // TODO: 调用 API 创建会话
-            // let newSession = try await APIService.shared.createSession(projectPath: projectPath)
-            // sessions.insert(newSession, at: 0)
-            // saveSessions()
-            // return newSession.id
-
+            let response = try await APIService.shared.createSession(workDir: projectPath)
+            await fetchSessions()
             isCreating = false
-            return nil
+            return response.sessionId
         } catch {
             self.error = error.localizedDescription
             isCreating = false
@@ -228,25 +458,99 @@ class SessionStore: ObservableObject {
     @MainActor
     func deleteSession(_ sessionId: String) async {
         do {
-            // TODO: 调用 API 删除会话
+            try await APIService.shared.deleteSession(sessionId)
             sessions.removeAll { $0.id == sessionId }
             messages.removeValue(forKey: sessionId)
             sessionStatuses.removeValue(forKey: sessionId)
             contextUsages.removeValue(forKey: sessionId)
             saveSessions()
+            // 删除本地消息文件
+            let url = messagesFilePath(for: sessionId)
+            try? FileManager.default.removeItem(at: url)
         } catch {
             self.error = error.localizedDescription
         }
     }
 
+    // 后台加载会话消息（不阻塞 UI）
+    func loadSessionMessagesBackground(_ sessionId: String) {
+        Task {
+            // 1. 加载本地缓存
+            if let localMessages = loadMessagesFromLocal(sessionId) {
+                await MainActor.run {
+                    messages[sessionId] = localMessages
+                }
+            }
+
+            // 2. 后台同步服务器
+            do {
+                let fetched = try await APIService.shared.getMessages(sessionId)
+                await MainActor.run {
+                    var existingIds = Set(self.messages[sessionId]?.map { $0.id } ?? [])
+                    var mergedMessages = self.messages[sessionId] ?? []
+
+                    for msg in fetched {
+                        if !existingIds.contains(msg.id) {
+                            mergedMessages.append(msg)
+                            existingIds.insert(msg.id)
+                        }
+                    }
+
+                    mergedMessages.sort { $0.timestamp < $1.timestamp }
+                    messages[sessionId] = mergedMessages
+                }
+                saveMessagesToLocal(sessionId)
+            } catch {
+                print("[SessionStore] ❌ Background sync failed: \(error)")
+            }
+        }
+    }
+
+    // 加载会话消息 - 先显示本地缓存，后台静默同步
     @MainActor
-    func fetchMessages(_ sessionId: String) async {
-        do {
-            // TODO: 调用 API 获取消息
-            // let fetched = try await APIService.shared.getMessages(sessionId)
-            // messages[sessionId] = fetched
-        } catch {
-            self.error = error.localizedDescription
+    func loadSessionMessages(_ sessionId: String) async {
+        // 1. 先加载本地缓存（立即显示，不阻塞）
+        if let localMessages = loadMessagesFromLocal(sessionId) {
+            // 直接赋值触发 UI 更新
+            messages[sessionId] = localMessages
+            print("[SessionStore] ✅ Loaded \(localMessages.count) messages from cache for \(sessionId)")
+        } else {
+            print("[SessionStore] ⚠️ No local cache for \(sessionId)")
+        }
+
+        // 2. 后台静默同步服务器消息（不阻塞 UI）
+        Task { [weak self] in
+            guard let self = self else { return }
+            do {
+                let fetched = try await APIService.shared.getMessages(sessionId)
+                print("[SessionStore] 🔄 Fetched \(fetched.count) messages from server")
+
+                await MainActor.run {
+                    // 合并消息（去重）
+                    var existingIds = Set(self.messages[sessionId]?.map { $0.id } ?? [])
+                    var mergedMessages = self.messages[sessionId] ?? []
+
+                    for msg in fetched {
+                        if !existingIds.contains(msg.id) {
+                            mergedMessages.append(msg)
+                            existingIds.insert(msg.id)
+                        }
+                    }
+
+                    // 按时间戳排序
+                    mergedMessages.sort { $0.timestamp < $1.timestamp }
+
+                    // 强制触发 UI 更新
+                    self.messages[sessionId] = nil
+                    self.messages[sessionId] = mergedMessages
+                    print("[SessionStore] ✅ Synced, total: \(mergedMessages.count)")
+                }
+
+                // 保存到本地
+                self.saveMessagesToLocal(sessionId)
+            } catch {
+                print("[SessionStore] ❌ Failed to sync messages: \(error)")
+            }
         }
     }
 
@@ -255,63 +559,8 @@ class SessionStore: ObservableObject {
     }
 
     func addMessage(_ sessionId: String, _ message: Message) {
-        if messages[sessionId] == nil {
-            messages[sessionId] = []
-        }
-        messages[sessionId]?.append(message)
-    }
-
-    func updateMessage(_ sessionId: String, _ messageId: String, updates: PartialMessage) {
-        guard var sessionMessages = messages[sessionId],
-              let index = sessionMessages.firstIndex(where: { $0.id == messageId }) else {
-            return
-        }
-
-        var message = sessionMessages[index]
-
-        if let content = updates.content {
-            message = Message(
-                id: message.id,
-                type: message.type,
-                content: content,
-                timestamp: message.timestamp,
-                toolName: message.toolName,
-                toolInput: message.toolInput,
-                toolResult: message.toolResult ?? updates.toolResult,
-                toolStatus: message.toolStatus ?? updates.toolStatus,
-                isStreaming: message.isStreaming
-            )
-        }
-
-        if let toolResult = updates.toolResult {
-            message = Message(
-                id: message.id,
-                type: message.type,
-                content: message.content,
-                timestamp: message.timestamp,
-                toolName: message.toolName,
-                toolInput: message.toolInput,
-                toolResult: toolResult,
-                toolStatus: message.toolStatus ?? updates.toolStatus,
-                isStreaming: message.isStreaming
-            )
-        }
-
-        if let toolStatus = updates.toolStatus {
-            message = Message(
-                id: message.id,
-                type: message.type,
-                content: message.content,
-                timestamp: message.timestamp,
-                toolName: message.toolName,
-                toolInput: message.toolInput,
-                toolResult: message.toolResult,
-                toolStatus: toolStatus,
-                isStreaming: message.isStreaming
-            )
-        }
-
-        sessionMessages[index] = message
+        var sessionMessages = messages[sessionId] ?? []
+        sessionMessages.append(message)
         messages[sessionId] = sessionMessages
     }
 
@@ -321,13 +570,16 @@ class SessionStore: ObservableObject {
 
     func updateSessionTitle(_ sessionId: String, _ title: String) {
         if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
+            let old = sessions[index]
             sessions[index] = Session(
-                id: sessions[index].id,
+                id: old.id,
                 title: title,
-                projectPath: sessions[index].projectPath,
-                createdAt: sessions[index].createdAt,
-                modifiedAt: Date(),
-                messageCount: sessions[index].messageCount
+                projectPath: old.projectPath,
+                workDir: old.workDir,
+                workDirExists: old.workDirExists,
+                createdAt: old.createdAt,
+                modifiedAt: ISO8601DateFormatter().string(from: Date()),
+                messageCount: old.messageCount
             )
             saveSessions()
         }
@@ -338,13 +590,43 @@ class SessionStore: ObservableObject {
     }
 
     func fetchRecentProjects() async {
-        // TODO: 调用 API 获取最近项目
+        do {
+            let projects = try await APIService.shared.getRecentProjects()
+            recentProjects = projects
+        } catch {
+            // 忽略错误
+        }
     }
-}
 
-// 消息部分更新结构体
-struct PartialMessage {
-    var content: String?
-    var toolResult: String?
-    var toolStatus: ToolStatus?
+    // MARK: - WebSocket 连接
+
+    func connectWebSocket(serverUrl: String, sessionId: String) {
+        // 确保 currentSessionId 在连接前设置，用于消息路由
+        currentSessionId = sessionId
+        webSocketService.connect(serverUrl: serverUrl, sessionId: sessionId)
+    }
+
+    func disconnectWebSocket() {
+        webSocketService.disconnect()
+    }
+
+    func sendMessage(_ content: String) {
+        let message = OutgoingMessage.userMessage(content)
+        webSocketService.send(message)
+    }
+
+    func sendPermissionResponse(requestId: String, allowed: Bool, always: Bool = false) {
+        let message = OutgoingMessage.permissionResponse(requestId: requestId, allowed: allowed, always: always)
+        webSocketService.send(message)
+    }
+
+    func sendQuestionResponse(questionId: String, answer: String) {
+        let message = OutgoingMessage.questionResponse(questionId: questionId, answer: answer)
+        webSocketService.send(message)
+    }
+
+    func stopGeneration() {
+        let message = OutgoingMessage.stop()
+        webSocketService.send(message)
+    }
 }

@@ -244,6 +244,7 @@ struct LiquidGlassTabBar: View {
                     )
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
+                    .contentShape(Rectangle())  // 扩大点击区域到整个 tab 格子
                     .background {
                         if selectedTab == tab.id {
                             Capsule()
@@ -257,6 +258,7 @@ struct LiquidGlassTabBar: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+        .contentShape(Rectangle())  // 整行拦截点击，防止穿透到下面内容
         .liquidGlass(
             cornerRadius: 28,
             interactive: true,

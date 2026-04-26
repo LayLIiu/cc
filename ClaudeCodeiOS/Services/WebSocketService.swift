@@ -42,14 +42,16 @@ class WebSocketService: NSObject, ObservableObject {
             wsUrl = "ws://" + wsUrl.dropFirst(7)
         }
 
-        // 添加 WebSocket 路径
+        // 添加 WebSocket 路径 - 与 React Native 保持一致
         if let sid = sessionId {
-            wsUrl += "/ws?sessionId=\(sid)"
+            wsUrl += "/ws/\(sid)"
         } else {
             wsUrl += "/ws"
         }
 
         guard let websocketUrl = URL(string: wsUrl) else { return }
+
+        print("[WebSocket] Connecting to: \(wsUrl)")
 
         let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
         webSocketTask = session.webSocketTask(with: websocketUrl)
@@ -115,6 +117,8 @@ class WebSocketService: NSObject, ObservableObject {
     private func parseMessage(_ text: String) {
         guard let data = text.data(using: .utf8) else { return }
 
+        print("[WebSocket] Received: \(text.prefix(200))")
+
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
 
@@ -123,6 +127,8 @@ class WebSocketService: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self.lastMessage = message
             }
+        } else {
+            print("[WebSocket] Failed to parse message")
         }
     }
 }
@@ -134,13 +140,18 @@ extension WebSocketService: URLSessionWebSocketDelegate {
         DispatchQueue.main.async {
             self.isConnected = true
             self.connectionStatus = .connected
+            print("[WebSocket] Connected")
         }
+        // 连接成功后请求服务器发送当前会话状态
+        let getStatusMsg = OutgoingMessage(type: "get_status")
+        send(getStatusMsg)
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         DispatchQueue.main.async {
             self.isConnected = false
             self.connectionStatus = .disconnected
+            print("[WebSocket] Disconnected")
         }
     }
 }

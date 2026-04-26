@@ -10,14 +10,17 @@ struct ChatView: View {
 
     @EnvironmentObject var sessionStore: SessionStore
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var authStore: AuthStore
 
     @State private var inputText = ""
     @State private var streamingText = ""
     @State private var streamingThinking = ""
     @State private var chatStatus: SessionStatus = .idle
     @State private var contextUsage: Int = 0
-    @State private var showScrollToBottom = false
     @State private var previousStatus: SessionStatus = .idle
+    @State private var scrollToBottomTrigger = false
+    @State private var isAtBottom = true  // 是否在最新消息位置
+    @State private var showScrollButton = false  // 是否显示"最新消息"按钮
 
     @FocusState private var isInputFocused: Bool
 
@@ -30,45 +33,72 @@ struct ChatView: View {
     }
 
     var allMessages: [Message] {
-        var result: [Message] = []
+        var result = messages
 
-        // 添加流式文本
-        if !streamingText.isEmpty {
-            result.append(Message(
-                id: "streaming-text",
-                type: .assistantText,
-                content: streamingText,
-                timestamp: Date()
-            ))
-        }
-
-        // 添加流式思考
+        // 添加流式思考（正在生成）
         if !streamingThinking.isEmpty {
             result.append(Message(
                 id: "streaming-thinking",
                 type: .thinking,
                 content: streamingThinking,
-                timestamp: Date(),
+                timestamp: ISO8601DateFormatter().string(from: Date()),
                 isStreaming: true
             ))
         }
 
-        // 添加历史消息
-        result.append(contentsOf: messages)
+        // 添加流式文本（正在生成）
+        if !streamingText.isEmpty {
+            result.append(Message(
+                id: "streaming-text",
+                type: .assistantText,
+                content: streamingText,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ))
+        }
 
         return result
     }
 
     var body: some View {
         ZStack {
-            // 背景 - 统一使用玻璃背景
+            // 背景
             Color.clear
                 .liquidGlassBackground(isDark: appState.themeMode == .dark || appState.themeMode == .glass)
                 .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 // 消息列表
-                messageList
+                ZStack(alignment: .bottom) {
+                    ScrollViewReader { proxy in
+                        messageList
+                            .onChange(of: scrollToBottomTrigger) { _, _ in
+                                withAnimation {
+                                    proxy.scrollTo("top-anchor", anchor: .top)
+                                }
+                            }
+                    }
+
+                    // "最新消息"按钮 - 只在往上滚动时显示
+                    if showScrollButton {
+                        Button {
+                            scrollToBottomTrigger.toggle()
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 10))
+                                Text("最新消息")
+                                    .font(.system(size: 11))
+                            }
+                            .foregroundColor(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                        }
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
 
                 // 输入区域
                 chatInput
@@ -88,10 +118,16 @@ struct ChatView: View {
             }
         }
         .task {
-            // 请求通知权限
-            _ = await NotificationService.shared.requestAuthorization()
+            // 设置当前会话 ID（用于 WebSocket 消息路由）
+            sessionStore.setCurrentSession(sessionId)
 
-            await sessionStore.fetchMessages(sessionId)
+            // 连接 WebSocket 接收实时消息
+            let serverUrl = authStore.serverUrl
+            if !serverUrl.isEmpty {
+                sessionStore.connectWebSocket(serverUrl: serverUrl, sessionId: sessionId)
+            }
+
+            // 更新状态
             if let status = sessionStore.sessionStatuses[sessionId] {
                 chatStatus = status
                 previousStatus = status
@@ -99,79 +135,22 @@ struct ChatView: View {
             if let usage = sessionStore.contextUsages[sessionId] {
                 contextUsage = usage
             }
-
-            // 测试：添加权限请求、问题消息和任务列表（只在首次进入时添加）
-            let existingMessages = sessionStore.messages[sessionId] ?? []
-            let hasPermissionMessage = existingMessages.contains { $0.type == .permissionRequest }
-            let hasQuestionMessage = existingMessages.contains { $0.type == .question }
-            let hasTaskListMessage = existingMessages.contains { $0.type == .taskList }
-
-            if sessionId == "session-1" && !hasPermissionMessage {
-                // 添加权限请求消息
-                sessionStore.addMessage(sessionId, Message(
-                    id: "msg-permission-1",
-                    type: .permissionRequest,
-                    content: "",
-                    timestamp: Date(),
-                    toolName: "Bash",
-                    permissionId: "perm-1",
-                    permissionDescription: "Claude Code 请求执行命令:\n\nnpm install react-native-vector-icons\n\n此命令将安装图标库到您的项目中。"
-                ))
-                // 更新状态为等待权限
-                chatStatus = .permissionPending
-                sessionStore.sessionStatuses[sessionId] = .permissionPending
-
-            } else if sessionId == "session-2" && !hasQuestionMessage {
-                // 添加问题消息
-                sessionStore.addMessage(sessionId, Message(
-                    id: "msg-question-1",
-                    type: .question,
-                    content: "请选择您想要使用的认证方式：",
-                    timestamp: Date(),
-                    questionId: "q-1",
-                    options: [
-                        "JWT (JSON Web Token)",
-                        "OAuth 2.0",
-                        "Session Cookie"
-                    ]
-                ))
-                // 更新状态为等待回答
-                chatStatus = .questionPending
-                sessionStore.sessionStatuses[sessionId] = .questionPending
-
-            } else if sessionId == "session-3" && !hasTaskListMessage {
-                // 添加任务列表示例
-                let tasks = [
-                    TaskItem(id: "t1", content: "分析当前查询结构", status: .completed),
-                    TaskItem(id: "t2", content: "检查索引配置", status: .completed),
-                    TaskItem(id: "t3", content: "添加 users 表 email 索引", status: .inProgress),
-                    TaskItem(id: "t4", content: "添加订单复合索引", status: .pending),
-                    TaskItem(id: "t5", content: "修复 N+1 查询问题", status: .pending)
-                ]
-                sessionStore.addMessage(sessionId, Message(
-                    id: "msg-tasklist-1",
-                    type: .taskList,
-                    content: "",
-                    timestamp: Date(),
-                    tasks: tasks
-                ))
-
-                // 发送常驻任务通知
-                Task {
-                    await NotificationService.shared.updateTaskListNotification(
-                        sessionId: sessionId,
-                        sessionTitle: session?.title ?? "任务",
-                        tasks: tasks
-                    )
-                }
+        }
+        .onDisappear {
+            sessionStore.disconnectWebSocket()
+            sessionStore.saveMessagesToLocal(sessionId)
+        }
+        .onChange(of: sessionStore.sessionStatuses[sessionId]) { _, newStatus in
+            if let status = newStatus {
+                chatStatus = status
             }
         }
-        .onChange(of: messages) { _, newMessages in
-            // 监听消息变化，更新任务通知
-            updateTaskNotification(newMessages)
+        .onChange(of: sessionStore.contextUsages[sessionId]) { _, newUsage in
+            if let usage = newUsage {
+                contextUsage = usage
+            }
         }
         .onChange(of: chatStatus) { oldStatus, newStatus in
-            // 当状态变为完成时，发送通知
             if newStatus == .completed && oldStatus != .completed {
                 sendCompletionNotification()
             }
@@ -189,33 +168,56 @@ struct ChatView: View {
     // MARK: - 消息列表
 
     private var messageList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 12) {
-                    ForEach(allMessages.reversed()) { message in
-                        MessageBubbleView(
-                            message: message,
-                            sessionId: sessionId,
-                            onPermissionHandled: {
-                                chatStatus = .idle
-                            },
-                            onQuestionAnswered: {
-                                chatStatus = .idle
-                            }
-                        )
-                        .id(message.id)
+        ScrollView {
+            LazyVStack(spacing: 12) {
+                // 顶部检测区域 - 判断是否在最新消息位置（倒序列表中顶部=最新）
+                Color.clear
+                    .frame(height: 1)
+                    .id("top-anchor")
+                    .onAppear {
+                        isAtBottom = true
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            showScrollButton = false
+                        }
                     }
+                    .onDisappear {
+                        isAtBottom = false
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            showScrollButton = true
+                        }
+                    }
+
+                // 消息倒序排列（最新在上方 = 视觉上的底部）
+                ForEach(allMessages.reversed()) { message in
+                    MessageBubbleView(
+                        message: message,
+                        sessionId: sessionId,
+                        onPermissionHandled: {
+                            chatStatus = .idle
+                        },
+                        onQuestionAnswered: {
+                            chatStatus = .idle
+                        }
+                    )
+                    .rotationEffect(.degrees(180))  // 翻转每条消息
+                    .id(message.id)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-            }
-            .scrollDismissesKeyboard(.interactively)
-            .onChange(of: allMessages.count) { _, _ in
-                if let firstId = allMessages.first?.id {
-                    withAnimation { proxy.scrollTo(firstId, anchor: .bottom) }
+
+                // 消息数量提示（在倒序列表中出现在底部）
+                if !messages.isEmpty {
+                    Text("\(messages.count) 条消息")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.bottom, 4)
+                        .rotationEffect(.degrees(180))
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
+        .rotationEffect(.degrees(180))  // 整体翻转，使最新消息在底部
+        .scrollDismissesKeyboard(.interactively)
     }
 
     // MARK: - 状态视图
@@ -307,7 +309,6 @@ struct ChatView: View {
     }
 
     private func sendCompletionNotification() {
-        // 获取最后一条助手消息作为通知内容
         guard let lastAssistantMessage = messages.last(where: { $0.type == .assistantText }) else { return }
 
         Task {
@@ -329,16 +330,17 @@ struct ChatView: View {
             id: "user-\(UUID().uuidString)",
             type: .userText,
             content: content,
-            timestamp: Date()
+            timestamp: ISO8601DateFormatter().string(from: Date())
         )
         sessionStore.addMessage(sessionId, userMessage)
+
+        // 发送到 WebSocket
+        sessionStore.sendMessage(content)
 
         // 重置状态
         streamingText = ""
         streamingThinking = ""
         chatStatus = .thinking
-
-        // TODO: 发送到 WebSocket
     }
 }
 
@@ -381,6 +383,8 @@ struct MessageBubbleView: View {
                     thinkingBubble
                 case .toolUse:
                     toolUseBubble
+                case .toolResult:
+                    toolResultBubble
                 case .permissionRequest:
                     permissionRequestBubble
                 case .question:
@@ -405,7 +409,7 @@ struct MessageBubbleView: View {
     }
 
     private var assistantTextBubble: some View {
-        Text(message.content)
+        MarkdownRenderer(content: message.content)
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .background(.ultraThinMaterial)
@@ -413,53 +417,45 @@ struct MessageBubbleView: View {
     }
 
     private var thinkingBubble: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "brain")
-                Text("思考")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                if message.isStreaming == true {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                }
-            }
-            .foregroundColor(.secondary)
-
-            Text(message.content)
-                .font(.system(.body, design: .monospaced))
-                .foregroundColor(.secondary)
-        }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        ThinkingBlock(
+            content: message.content,
+            isStreaming: message.isStreaming == true
+        )
     }
 
     private var toolUseBubble: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        ToolCallBlock(
+            toolName: message.toolName ?? "Unknown",
+            input: message.toolInput,
+            status: message.toolStatus ?? .completed,
+            result: message.toolResult
+        )
+    }
+
+    private var toolResultBubble: some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Image(systemName: "wrench.and.screwdriver")
-                Text(message.toolName ?? "Tool")
+                Image(systemName: "doc.text")
+                Text("结果")
                     .font(.caption)
                     .fontWeight(.medium)
-
                 Spacer()
-
-                toolStatusBadge
-            }
-
-            if let input = message.toolInput, !input.isEmpty {
-                Text(formatToolInput(input))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
+                if let status = message.toolStatus {
+                    switch status {
+                    case .completed:
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    case .failed:
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.red)
+                    default:
+                        EmptyView()
+                    }
+                }
             }
 
             if let result = message.toolResult {
-                Divider()
-                Text(result)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(10)
+                MarkdownRenderer(content: result)
             }
         }
         .padding(12)
@@ -774,6 +770,11 @@ struct MessageBubbleView: View {
     // MARK: - 操作处理
 
     private func handlePermission(allow: Bool) {
+        // 发送权限响应到 WebSocket
+        if let permissionId = message.permissionId {
+            sessionStore.sendPermissionResponse(requestId: permissionId, allowed: allow)
+        }
+
         // 更新消息状态
         if let index = sessionStore.messages[sessionId]?.firstIndex(where: { $0.id == message.id }) {
             var updatedMessage = message
@@ -787,6 +788,11 @@ struct MessageBubbleView: View {
     }
 
     private func handleQuestionAnswer(_ answer: String) {
+        // 发送问题响应到 WebSocket
+        if let questionId = message.questionId {
+            sessionStore.sendQuestionResponse(questionId: questionId, answer: answer)
+        }
+
         // 更新消息状态
         if let index = sessionStore.messages[sessionId]?.firstIndex(where: { $0.id == message.id }) {
             var updatedMessage = message
@@ -802,6 +808,10 @@ struct MessageBubbleView: View {
     @ViewBuilder
     private var toolStatusBadge: some View {
         switch message.toolStatus {
+        case .pending:
+            Label("等待中", systemImage: "clock")
+                .font(.caption2)
+                .foregroundColor(.secondary)
         case .running:
             HStack(spacing: 4) {
                 ProgressView()
@@ -1112,6 +1122,8 @@ extension PermissionRequest: Identifiable {
 extension QuestionRequest: Identifiable {
     var id: String { questionId }
 }
+
+// MARK: - 滚动偏移 PreferenceKey
 
 #Preview {
     NavigationStack {
