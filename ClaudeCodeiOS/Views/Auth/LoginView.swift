@@ -100,13 +100,23 @@ struct LoginView: View {
 
         Task {
             do {
-                // TODO: 实际连接验证
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+                // 设置 API 服务地址
+                APIService.shared.setBaseUrl(url)
 
-                // 模拟登录成功
-                let user = User(id: "1", name: "用户", email: nil)
+                // 验证连接 - 获取网络信息
+                let networkInfo = try await APIService.shared.getNetworkInfo()
+
                 await MainActor.run {
+                    // 保存 URL
                     authStore.setLanUrl(url)
+
+                    // 如果有隧道地址，也保存
+                    if let tunnelUrl = networkInfo.tunnelUrl, !tunnelUrl.isEmpty {
+                        authStore.setTunnelUrl(tunnelUrl)
+                    }
+
+                    // 登录成功
+                    let user = User(id: "1", name: "用户", email: nil)
                     authStore.login(user: user)
                     isConnecting = false
                 }

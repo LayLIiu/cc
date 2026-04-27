@@ -125,6 +125,9 @@ struct ChatView: View {
             // 设置当前会话 ID（用于 WebSocket 消息路由）
             sessionStore.setCurrentSession(sessionId)
 
+            // 先从服务端拉取最新消息（可能桌面端已产生新消息）
+            await fetchLatestMessages()
+
             // 连接 WebSocket 接收实时消息
             let serverUrl = authStore.serverUrl
             if !serverUrl.isEmpty {
@@ -325,6 +328,32 @@ struct ChatView: View {
                 title: session?.title ?? "对话完成",
                 message: lastAssistantMessage.content
             )
+        }
+    }
+
+    // MARK: - 拉取最新消息
+
+    @MainActor
+    private func fetchLatestMessages() async {
+        do {
+            let serverMessages = try await APIService.shared.getMessages(sessionId)
+            let localMessages = sessionStore.messages[sessionId] ?? []
+            var existingIds = Set(localMessages.map { $0.id })
+            var merged = localMessages
+
+            for msg in serverMessages {
+                if !existingIds.contains(msg.id) {
+                    merged.append(msg)
+                    existingIds.insert(msg.id)
+                }
+            }
+
+            merged.sort { $0.timestamp < $1.timestamp }
+            sessionStore.messages[sessionId] = merged
+            sessionStore.saveMessagesToLocal(sessionId)
+            print("[ChatView] ✅ Synced \(serverMessages.count) from server, total: \(merged.count)")
+        } catch {
+            print("[ChatView] ⚠️ Failed to fetch messages: \(error)")
         }
     }
 

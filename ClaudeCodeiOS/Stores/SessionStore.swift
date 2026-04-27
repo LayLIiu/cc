@@ -91,12 +91,25 @@ class SessionStore: ObservableObject {
         // 加载保存的会话数据
         loadSavedData()
 
-        // 监听 WebSocket 消息 - 实时推送到对应会话
+        // WebSocket 消息由 ChatView 直接监听处理，这里不再重复处理
+        // 但仍保留连接，以便非聊天页面也能收到状态更新
         webSocketService.$lastMessage
             .receive(on: DispatchQueue.main)
+            .compactMap { $0 }
+            .filter { $0.type == .sessionTitleUpdated || $0.type == .status }
             .sink { [weak self] message in
-                guard let message = message else { return }
-                self?.handleWebSocketMessage(message)
+                guard let self = self else { return }
+                let targetSessionId = message.sessionId ?? self.currentSessionId
+                guard let sessionId = targetSessionId else { return }
+
+                switch message.type {
+                case .sessionTitleUpdated:
+                    if let title = message.title { self.updateSessionTitle(sessionId, title) }
+                case .status:
+                    if let state = message.state { self.updateSessionStatusFromState(sessionId, state) }
+                default:
+                    break
+                }
             }
             .store(in: &cancellables)
     }
@@ -647,5 +660,46 @@ class SessionStore: ObservableObject {
     func stopGeneration() {
         let message = OutgoingMessage.stop()
         webSocketService.send(message)
+    }
+
+    // MARK: - 导入会话
+
+    @MainActor
+    func importSessions(
+        _ sessionIds: [String],
+        _ sessionInfos: [Session],
+        onProgress: ((_ imported: Int, _ total: Int) -> Void)? = nil
+    ) async -> (count: Int, error: String?) {
+        var importedCount = 0
+        let total = sessionIds.count
+
+        for (index, sessionId) in sessionIds.enumerated() {
+            do {
+                // 获取服务器消息
+                let messages = try await APIService.shared.getMessages(sessionId)
+
+                // 写入本地
+                self.messages[sessionId] = messages
+                saveMessagesToLocal(sessionId)
+
+                // 如果本地没有该会话，添加到会话列表
+                let sessionInfo = sessionInfos.first { $0.id == sessionId }
+                if let info = sessionInfo, !self.sessions.contains(where: { $0.id == sessionId }) {
+                    self.sessions.append(info)
+                    saveSessions()
+                }
+
+                importedCount += 1
+                onProgress?(importedCount, total)
+            } catch {
+                print("[SessionStore] ❌ Failed to import session \(sessionId): \(error)")
+                // 继续导入其他的
+            }
+        }
+
+        if importedCount == 0 {
+            return (0, "导入失败，请检查网络连接")
+        }
+        return (importedCount, nil)
     }
 }

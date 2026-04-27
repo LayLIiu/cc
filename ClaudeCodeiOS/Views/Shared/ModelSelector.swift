@@ -10,6 +10,10 @@ struct ModelSelector: View {
     var body: some View {
         Button {
             showModelSheet = true
+            // 每次打开时刷新模型列表
+            Task {
+                await appState.fetchModels()
+            }
         } label: {
             Text("✦")
                 .font(.system(size: 14, weight: .bold))
@@ -22,6 +26,10 @@ struct ModelSelector: View {
         .onAppear {
             withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
                 glowOpacity = 1.0
+            }
+            // 首次加载获取模型
+            Task {
+                await appState.fetchModels()
             }
         }
         .sheet(isPresented: $showModelSheet) {
@@ -36,43 +44,61 @@ struct ModelSelectionSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
 
-    private let models: [(id: String, name: String, icon: String, description: String)] = [
-        ("claude-opus-4-7", "Claude Opus 4", "◆", "最强大的推理能力"),
-        ("claude-sonnet-4-6", "Claude Sonnet 4", "✦", "平衡的性能和速度"),
-        ("claude-haiku-4-5", "Claude Haiku 4", "⚡", "快速响应"),
-    ]
-
-    private let effortOptions = [
-        ("low", "低"),
-        ("medium", "中"),
-        ("high", "高"),
-        ("max", "最高"),
+    private let effortLabels: [String: String] = [
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "max": "最高"
     ]
 
     var body: some View {
         NavigationStack {
             List {
+                // 服务商信息
+                if let providerName = appState.currentProviderName {
+                    Section {
+                        HStack {
+                            Text("服务商")
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Text(providerName)
+                                .foregroundColor(.adaptiveText)
+                        }
+                    }
+                }
+
+                // 模型列表
                 Section {
-                    ForEach(models, id: \.id) { model in
-                        Button {
-                            appState.setCurrentModel(Model(id: model.id, name: model.name))
-                            dismiss()
-                        } label: {
-                            HStack {
-                                Image(systemName: appState.currentModel?.id == model.id ? "checkmark.circle.fill" : "circle")
-                                    .foregroundColor(appState.currentModel?.id == model.id ? .adaptivePrimary : .secondary)
+                    if appState.isLoadingModels {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                            Spacer()
+                        }
+                    } else if appState.availableModels.isEmpty {
+                        Text("暂无可用模型")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    } else {
+                        ForEach(appState.availableModels) { model in
+                            Button {
+                                appState.setCurrentModel(model)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Image(systemName: appState.currentModel?.id == model.id ? "checkmark.circle.fill" : "circle")
+                                        .foregroundColor(appState.currentModel?.id == model.id ? .adaptivePrimary : .secondary)
 
-                                Text(model.icon)
-                                    .font(.system(size: 18))
-                                    .foregroundColor(.adaptivePrimary)
-
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(model.name)
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                    Text(model.description)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(model.name)
+                                            .font(.subheadline)
+                                            .foregroundColor(.primary)
+                                        if let desc = model.description {
+                                            Text(desc)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -81,18 +107,22 @@ struct ModelSelectionSheet: View {
                     Text("选择模型")
                 }
 
+                // 思考强度
                 Section {
                     HStack(spacing: 8) {
-                        ForEach(effortOptions, id: \.0) { option in
+                        ForEach(appState.availableEfforts, id: \.self) { effort in
                             Button {
-                                appState.setEffortLevel(option.0)
+                                appState.setEffortLevel(effort)
+                                Task {
+                                    try? await APIService.shared.setEffort(effort)
+                                }
                             } label: {
-                                Text(option.1)
+                                Text(effortLabels[effort] ?? effort)
                                     .font(.subheadline)
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
-                                    .background(appState.effortLevel == option.0 ? Color.adaptivePrimary : Color.secondary.opacity(0.1))
-                                    .foregroundColor(appState.effortLevel == option.0 ? .white : .secondary)
+                                    .background(appState.effortLevel == effort ? Color.adaptivePrimary : Color.secondary.opacity(0.1))
+                                    .foregroundColor(appState.effortLevel == effort ? .white : .secondary)
                                     .cornerRadius(8)
                             }
                         }

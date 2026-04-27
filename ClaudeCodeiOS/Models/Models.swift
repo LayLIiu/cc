@@ -8,10 +8,12 @@ import SwiftUI
 struct Session: Identifiable, Codable, Hashable {
     let id: String
     var title: String
-    var projectPath: String?
-    let createdAt: Date
-    var modifiedAt: Date
-    var messageCount: Int
+    let projectPath: String
+    let workDir: String?
+    let workDirExists: Bool
+    let createdAt: String
+    let modifiedAt: String
+    let messageCount: Int
 
     static func == (lhs: Session, rhs: Session) -> Bool {
         lhs.id == rhs.id
@@ -27,17 +29,50 @@ struct Session: Identifiable, Codable, Hashable {
 enum MessageType: String, Codable {
     case userText = "user_text"
     case assistantText = "assistant_text"
-    case thinking = "thinking"
+    case thinking
     case toolUse = "tool_use"
+    case toolResult = "tool_result"
     case permissionRequest = "permission_request"
-    case question = "question"
+    case question
     case taskList = "task_list"
 }
 
 enum ToolStatus: String, Codable {
+    case pending
     case running
     case completed
     case failed
+}
+
+struct Message: Identifiable, Codable, Equatable {
+    let id: String
+    let type: MessageType
+    let content: String
+    let timestamp: String
+    var toolName: String?
+    var toolInput: [String: AnyCodable]?
+    var toolResult: String?
+    var toolStatus: ToolStatus?
+    var isStreaming: Bool?
+
+    // 权限请求相关
+    var permissionId: String?
+    var permissionDescription: String?
+    var isPermissionHandled: Bool = false
+    var permissionResult: Bool?
+
+    // 问题选项相关
+    var questionId: String?
+    var options: [String]?
+    var selectedAnswer: String?
+    var isQuestionAnswered: Bool = false
+
+    // 任务列表相关
+    var tasks: [TaskItem]?
+
+    static func == (lhs: Message, rhs: Message) -> Bool {
+        lhs.id == rhs.id
+    }
 }
 
 // 任务状态
@@ -73,62 +108,27 @@ struct TaskItem: Identifiable, Codable, Equatable {
     }
 }
 
-struct Message: Identifiable, Codable, Equatable {
-    let id: String
-    let type: MessageType
-    let content: String
-    let timestamp: Date
-    var toolName: String?
-    var toolInput: [String: AnyCodable]?
-    var toolResult: String?
-    var toolStatus: ToolStatus?
-    var isStreaming: Bool?
-
-    // 权限请求相关
-    var permissionId: String?
-    var permissionDescription: String?
-    var isPermissionHandled: Bool = false
-    var permissionResult: Bool?
-
-    // 问题选项相关
-    var questionId: String?
-    var options: [String]?
-    var selectedAnswer: String?
-    var isQuestionAnswered: Bool = false
-
-    // 任务列表相关
-    var tasks: [TaskItem]?
-
-    static func == (lhs: Message, rhs: Message) -> Bool {
-        lhs.id == rhs.id
-    }
-
-    static let dateFormat: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-}
-
 // MARK: - 服务商模型
 
 enum ApiFormat: String, Codable, CaseIterable {
     case anthropic = "anthropic"
-    case openAI = "openai"
-    case openAICompatible = "openai_compatible"
+    case openAIChat = "openai_chat"
+    case openAIResponses = "openai_responses"
 
     var label: String {
         switch self {
         case .anthropic: return "Anthropic"
-        case .openAI: return "OpenAI"
-        case .openAICompatible: return "OpenAI 兼容"
+        case .openAIChat: return "OpenAI Chat"
+        case .openAIResponses: return "OpenAI Responses"
         }
     }
 }
 
 struct ModelMapping: Codable {
-    let modelId: String
-    let displayName: String
+    let main: String
+    let haiku: String
+    let sonnet: String
+    let opus: String
 }
 
 struct Provider: Identifiable, Codable {
@@ -138,10 +138,8 @@ struct Provider: Identifiable, Codable {
     var apiKey: String
     var baseUrl: String
     let apiFormat: ApiFormat
-    var models: [ModelMapping]
+    var models: ModelMapping
     var notes: String?
-    let createdAt: Date
-    var updatedAt: Date
 }
 
 // MARK: - 用户模型
@@ -188,7 +186,7 @@ struct WSMessage: Codable {
     var sessionId: String?
     var state: String?
     var verb: String?
-    var timestamp: Date?
+    var timestamp: String?
     var id: String?
     var percentage: Double?
     var used: Int?
@@ -232,6 +230,10 @@ struct AnyCodable: Codable, Hashable {
         }
     }
 
+    init(value: Any) {
+        self.value = value
+    }
+
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         if let string = value as? String {
@@ -242,6 +244,10 @@ struct AnyCodable: Codable, Hashable {
             try container.encode(double)
         } else if let bool = value as? Bool {
             try container.encode(bool)
+        } else if let array = value as? [Any] {
+            try container.encode(array.map { AnyCodable(value: $0) })
+        } else if let dict = value as? [String: Any] {
+            try container.encode(dict.mapValues { AnyCodable(value: $0) })
         }
     }
 
@@ -280,4 +286,6 @@ struct RecentProject: Codable {
     let isGit: Bool
     let repoName: String?
     let branch: String?
+    let modifiedAt: String
+    let sessionCount: Int
 }

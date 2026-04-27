@@ -22,7 +22,7 @@ struct SessionsView: View {
         return sessionStore.groupedSessions.compactMap { group in
             let filtered = group.sessions.filter { session in
                 session.title.localizedCaseInsensitiveContains(searchText) ||
-                (session.projectPath?.localizedCaseInsensitiveContains(searchText) ?? false)
+                session.projectPath.localizedCaseInsensitiveContains(searchText)
             }
             return filtered.isEmpty ? nil : (group.title, filtered)
         }
@@ -249,8 +249,8 @@ struct SessionItemView: View {
                         .foregroundColor(.adaptiveText)
                         .lineLimit(1)
 
-                    if let path = session.projectPath {
-                        Text(path)
+                    if !session.projectPath.isEmpty {
+                        Text(session.projectPath)
                             .font(.caption)
                             .foregroundColor(.adaptiveTextSecondary)
                             .lineLimit(1)

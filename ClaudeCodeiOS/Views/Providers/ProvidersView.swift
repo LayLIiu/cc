@@ -60,6 +60,10 @@ struct ProvidersView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                // 加载服务商列表
+                await providerStore.loadProviders()
+            }
             .sheet(isPresented: $showAddModal) {
                 ProviderFormSheet(
                     preset: selectedPreset,
@@ -67,14 +71,7 @@ struct ProvidersView: View {
                     onSave: { input in
                         Task {
                             if let provider = editingProvider {
-                                let updateInput = UpdateProviderInput(
-                                    name: input.name,
-                                    apiKey: input.apiKey,
-                                    baseUrl: input.baseUrl,
-                                    models: input.models,
-                                    notes: input.notes
-                                )
-                                try? await providerStore.updateProvider(provider.id, updateInput)
+                                try? await providerStore.updateProvider(provider.id, input)
                             } else {
                                 try? await providerStore.createProvider(input)
                             }
@@ -330,7 +327,7 @@ struct ProviderCard: View {
 struct ProviderFormSheet: View {
     let preset: String?
     let editingProvider: Provider?
-    let onSave: (CreateProviderInput) -> Void
+    let onSave: (ProviderInput) -> Void
 
     @Environment(\.dismiss) var dismiss
 
@@ -392,13 +389,14 @@ struct ProviderFormSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
                         guard let preset = selectedPreset else { return }
-                        let input = CreateProviderInput(
+                        let input = ProviderInput(
                             presetId: preset.id,
                             name: name,
                             apiKey: apiKey,
                             baseUrl: baseUrl,
                             apiFormat: preset.apiFormat,
-                            models: preset.defaultModels
+                            models: preset.defaultModels,
+                            notes: nil
                         )
                         onSave(input)
                     } label: {

@@ -47,59 +47,37 @@ class ProviderStore: ObservableObject {
         error = nil
 
         do {
-            // TODO: 调用 API
-            isLoading = false
+            let response = try await APIService.shared.getProviders()
+            self.providers = response.providers
+            self.activeProviderId = response.activeId
+            saveProviders()
         } catch {
             self.error = error.localizedDescription
-            isLoading = false
         }
+
+        isLoading = false
     }
 
     @MainActor
-    func createProvider(_ input: CreateProviderInput) async throws {
-        let newProvider = Provider(
-            id: UUID().uuidString,
-            presetId: input.presetId,
-            name: input.name,
-            apiKey: input.apiKey,
-            baseUrl: input.baseUrl,
-            apiFormat: input.apiFormat,
-            models: input.models,
-            notes: input.notes,
-            createdAt: Date(),
-            updatedAt: Date()
-        )
-
-        providers.append(newProvider)
+    func createProvider(_ input: ProviderInput) async throws {
+        let response = try await APIService.shared.createProvider(input)
+        providers.append(response.provider)
         saveProviders()
     }
 
     @MainActor
-    func updateProvider(_ id: String, _ input: UpdateProviderInput) async throws {
-        guard let index = providers.firstIndex(where: { $0.id == id }) else {
-            throw ProviderError.notFound
+    func updateProvider(_ id: String, _ input: ProviderInput) async throws {
+        let response = try await APIService.shared.updateProvider(id, input)
+
+        if let index = providers.firstIndex(where: { $0.id == id }) {
+            providers[index] = response.provider
+            saveProviders()
         }
-
-        var provider = providers[index]
-        provider = Provider(
-            id: provider.id,
-            presetId: provider.presetId,
-            name: input.name ?? provider.name,
-            apiKey: input.apiKey ?? provider.apiKey,
-            baseUrl: input.baseUrl ?? provider.baseUrl,
-            apiFormat: provider.apiFormat,
-            models: input.models ?? provider.models,
-            notes: input.notes ?? provider.notes,
-            createdAt: provider.createdAt,
-            updatedAt: Date()
-        )
-
-        providers[index] = provider
-        saveProviders()
     }
 
     @MainActor
     func deleteProvider(_ id: String) async throws {
+        try await APIService.shared.deleteProvider(id)
         providers.removeAll { $0.id == id }
         if activeProviderId == id {
             activeProviderId = nil
@@ -108,38 +86,25 @@ class ProviderStore: ObservableObject {
     }
 
     func activateProvider(_ id: String) async throws {
+        try await APIService.shared.activateProvider(id)
         activeProviderId = id
         saveProviders()
     }
 
     func activateOfficial() async throws {
+        try await APIService.shared.activateOfficialProvider()
         activeProviderId = nil
         saveProviders()
+    }
+
+    func testProvider(_ id: String, overrides: ProviderTestOverrides? = nil) async throws -> Bool {
+        let response = try await APIService.shared.testProvider(id, overrides: overrides)
+        return response.result.connectivity.success
     }
 
     func setError(_ error: String?) {
         self.error = error
     }
-}
-
-// MARK: - 输入类型
-
-struct CreateProviderInput: Encodable {
-    let presetId: String
-    let name: String
-    let apiKey: String
-    let baseUrl: String
-    let apiFormat: ApiFormat
-    let models: [ModelMapping]
-    var notes: String?
-}
-
-struct UpdateProviderInput: Encodable {
-    var name: String?
-    var apiKey: String?
-    var baseUrl: String?
-    var models: [ModelMapping]?
-    var notes: String?
 }
 
 // MARK: - 错误类型
@@ -163,7 +128,7 @@ struct ProviderPreset: Identifiable {
     let name: String
     let baseUrl: String
     let apiFormat: ApiFormat
-    let defaultModels: [ModelMapping]
+    let defaultModels: ModelMapping
 }
 
 let PROVIDER_PRESETS: [ProviderPreset] = [
@@ -171,47 +136,35 @@ let PROVIDER_PRESETS: [ProviderPreset] = [
         id: "openai",
         name: "OpenAI",
         baseUrl: "https://api.openai.com/v1",
-        apiFormat: .openAI,
-        defaultModels: [
-            ModelMapping(modelId: "gpt-4o", displayName: "GPT-4o"),
-            ModelMapping(modelId: "gpt-4o-mini", displayName: "GPT-4o Mini")
-        ]
+        apiFormat: .openAIChat,
+        defaultModels: ModelMapping(main: "gpt-4o", haiku: "gpt-4o-mini", sonnet: "gpt-4o", opus: "gpt-4o")
     ),
     ProviderPreset(
         id: "anthropic",
         name: "Anthropic",
         baseUrl: "https://api.anthropic.com",
         apiFormat: .anthropic,
-        defaultModels: [
-            ModelMapping(modelId: "claude-sonnet-4-20250514", displayName: "Claude Sonnet 4"),
-            ModelMapping(modelId: "claude-opus-4-20250514", displayName: "Claude Opus 4")
-        ]
+        defaultModels: ModelMapping(main: "claude-sonnet-4-20250514", haiku: "claude-haiku-4-5-20250219", sonnet: "claude-sonnet-4-20250514", opus: "claude-opus-4-20250514")
     ),
     ProviderPreset(
         id: "deepseek",
         name: "DeepSeek",
         baseUrl: "https://api.deepseek.com",
-        apiFormat: .openAICompatible,
-        defaultModels: [
-            ModelMapping(modelId: "deepseek-chat", displayName: "DeepSeek Chat"),
-            ModelMapping(modelId: "deepseek-reasoner", displayName: "DeepSeek Reasoner")
-        ]
+        apiFormat: .openAIChat,
+        defaultModels: ModelMapping(main: "deepseek-chat", haiku: "deepseek-chat", sonnet: "deepseek-reasoner", opus: "deepseek-reasoner")
     ),
     ProviderPreset(
         id: "gemini",
         name: "Google Gemini",
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        apiFormat: .openAICompatible,
-        defaultModels: [
-            ModelMapping(modelId: "gemini-2.5-pro", displayName: "Gemini 2.5 Pro"),
-            ModelMapping(modelId: "gemini-2.5-flash", displayName: "Gemini 2.5 Flash")
-        ]
+        apiFormat: .openAIChat,
+        defaultModels: ModelMapping(main: "gemini-2.5-pro", haiku: "gemini-2.5-flash", sonnet: "gemini-2.5-pro", opus: "gemini-2.5-pro")
     ),
     ProviderPreset(
         id: "custom",
         name: "自定义",
         baseUrl: "",
-        apiFormat: .openAICompatible,
-        defaultModels: []
+        apiFormat: .openAIChat,
+        defaultModels: ModelMapping(main: "", haiku: "", sonnet: "", opus: "")
     )
 ]

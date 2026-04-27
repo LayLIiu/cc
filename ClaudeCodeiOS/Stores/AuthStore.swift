@@ -10,13 +10,22 @@ class AuthStore: ObservableObject {
 
     // 服务器配置
     @Published var lanUrl: String {
-        didSet { UserDefaults.standard.set(lanUrl, forKey: "lanUrl") }
+        didSet {
+            UserDefaults.standard.set(lanUrl, forKey: "lanUrl")
+            updateApiServiceUrl()
+        }
     }
     @Published var tunnelUrl: String {
-        didSet { UserDefaults.standard.set(tunnelUrl, forKey: "tunnelUrl") }
+        didSet {
+            UserDefaults.standard.set(tunnelUrl, forKey: "tunnelUrl")
+            updateApiServiceUrl()
+        }
     }
     @Published var serverMode: ServerMode {
-        didSet { UserDefaults.standard.set(serverMode.rawValue, forKey: "serverMode") }
+        didSet {
+            UserDefaults.standard.set(serverMode.rawValue, forKey: "serverMode")
+            updateApiServiceUrl()
+        }
     }
 
     // 当前使用的服务器地址
@@ -38,6 +47,9 @@ class AuthStore: ObservableObject {
 
         // 检查登录状态
         checkLoginStatus()
+
+        // 更新 API 服务地址
+        updateApiServiceUrl()
     }
 
     private func checkLoginStatus() {
@@ -46,6 +58,13 @@ class AuthStore: ObservableObject {
            let savedUser = try? JSONDecoder().decode(User.self, from: userData) {
             self.user = savedUser
             self.isLoggedIn = true
+        }
+    }
+
+    private func updateApiServiceUrl() {
+        let url = serverUrl
+        if !url.isEmpty {
+            APIService.shared.setBaseUrl(url)
         }
     }
 

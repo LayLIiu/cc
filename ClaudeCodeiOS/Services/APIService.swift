@@ -17,18 +17,17 @@ class APIService {
 
     func getSessions() async throws -> [Session] {
         let data = try await request("/api/sessions")
-        let response = try JSONDecoder().decode([Session].self, from: data)
-        return response
+        let response = try JSONDecoder().decode(SessionsResponse.self, from: data)
+        return response.sessions
     }
 
-    func createSession(projectPath: String? = nil) async throws -> Session {
+    func createSession(workDir: String? = nil) async throws -> CreateSessionResponse {
         var body: [String: String] = [:]
-        if let path = projectPath {
-            body["projectPath"] = path
+        if let dir = workDir {
+            body["workDir"] = dir
         }
-        let data = try await request("/api/sessions", method: "POST", body: body)
-        let response = try JSONDecoder().decode(Session.self, from: data)
-        return response
+        let data = try await request("/api/sessions", method: "POST", body: body.isEmpty ? nil : body)
+        return try JSONDecoder().decode(CreateSessionResponse.self, from: data)
     }
 
     func deleteSession(_ sessionId: String) async throws {
@@ -36,65 +35,286 @@ class APIService {
     }
 
     func renameSession(_ sessionId: String, title: String) async throws {
-        _ = try await request("/api/sessions/\(sessionId)/rename", method: "POST", body: ["title": title])
+        _ = try await request("/api/sessions/\(sessionId)", method: "PATCH", body: ["title": title])
+    }
+
+    func getRecentProjects() async throws -> [RecentProject] {
+        let data = try await request("/api/sessions/recent-projects")
+        let response = try JSONDecoder().decode(RecentProjectsResponse.self, from: data)
+        return response.projects
     }
 
     // MARK: - 消息 API
 
     func getMessages(_ sessionId: String) async throws -> [Message] {
         let data = try await request("/api/sessions/\(sessionId)/messages")
-        let response = try JSONDecoder().decode([Message].self, from: data)
-        return response
+        let response = try JSONDecoder().decode(MessagesResponse.self, from: data)
+        return transformMessages(response.messages.compactMap { $0 })
     }
 
     // MARK: - 服务商 API
 
-    func getProviders() async throws -> [Provider] {
+    func getProviders() async throws -> ProvidersResponse {
         let data = try await request("/api/providers")
-        let response = try JSONDecoder().decode([Provider].self, from: data)
-        return response
+        return try JSONDecoder().decode(ProvidersResponse.self, from: data)
     }
 
-    func createProvider(_ input: CreateProviderInput) async throws -> Provider {
+    func createProvider(_ input: ProviderInput) async throws -> ProviderResponse {
         let data = try await request("/api/providers", method: "POST", body: input)
-        let response = try JSONDecoder().decode(Provider.self, from: data)
-        return response
+        return try JSONDecoder().decode(ProviderResponse.self, from: data)
     }
 
-    func updateProvider(_ id: String, _ input: UpdateProviderInput) async throws -> Provider {
+    func updateProvider(_ id: String, _ input: ProviderInput) async throws -> ProviderResponse {
         let data = try await request("/api/providers/\(id)", method: "PUT", body: input)
-        let response = try JSONDecoder().decode(Provider.self, from: data)
-        return response
+        return try JSONDecoder().decode(ProviderResponse.self, from: data)
     }
 
     func deleteProvider(_ id: String) async throws {
         _ = try await request("/api/providers/\(id)", method: "DELETE")
     }
 
-    func testProvider(_ id: String) async throws -> ProviderTestResult {
-        let data = try await request("/api/providers/\(id)/test", method: "POST")
-        let response = try JSONDecoder().decode(ProviderTestResult.self, from: data)
-        return response
+    func testProvider(_ id: String, overrides: ProviderTestOverrides? = nil) async throws -> ProviderTestResultResponse {
+        let data = try await request("/api/providers/\(id)/test", method: "POST", body: overrides)
+        return try JSONDecoder().decode(ProviderTestResultResponse.self, from: data)
+    }
+
+    func activateProvider(_ id: String) async throws {
+        _ = try await request("/api/providers/\(id)/activate", method: "POST")
+    }
+
+    func activateOfficialProvider() async throws {
+        _ = try await request("/api/providers/official", method: "POST")
+    }
+
+    // MARK: - 模型 API
+
+    func getModels() async throws -> ModelsResponse {
+        let data = try await request("/api/models")
+        return try JSONDecoder().decode(ModelsResponse.self, from: data)
+    }
+
+    func getCurrentModel() async throws -> CurrentModelResponse {
+        let data = try await request("/api/models/current")
+        return try JSONDecoder().decode(CurrentModelResponse.self, from: data)
+    }
+
+    func setCurrentModel(_ modelId: String) async throws {
+        _ = try await request("/api/models/current", method: "PUT", body: ["modelId": modelId])
+    }
+
+    // MARK: - Effort API
+
+    func getEffort() async throws -> EffortResponse {
+        let data = try await request("/api/effort")
+        return try JSONDecoder().decode(EffortResponse.self, from: data)
+    }
+
+    func setEffort(_ level: String) async throws {
+        _ = try await request("/api/effort", method: "PUT", body: ["level": level])
     }
 
     // MARK: - 网络 API
 
     func getNetworkInfo() async throws -> NetworkInfo {
-        let data = try await request("/api/network/info")
-        let response = try JSONDecoder().decode(NetworkInfo.self, from: data)
-        return response
+        let paths = ["/api/mobile/network-info", "/api/mobile/networkInfo"]
+        for path in paths {
+            do {
+                let data = try await request(path)
+                return try JSONDecoder().decode(NetworkInfo.self, from: data)
+            } catch {
+                continue
+            }
+        }
+        return NetworkInfo(lanUrl: nil, tunnelUrl: nil, tunnelEnabled: false, serverPort: 0)
     }
 
     func getPairingCode() async throws -> PairingCodeResponse {
-        let data = try await request("/api/network/pairing-code", method: "POST")
-        let response = try JSONDecoder().decode(PairingCodeResponse.self, from: data)
-        return response
+        let paths = ["/api/mobile/pairing-code", "/api/mobile/pairingCode"]
+        var lastError: Error?
+        for path in paths {
+            do {
+                let data = try await request(path, method: "POST", body: ["ttlHours": 1])
+                return try JSONDecoder().decode(PairingCodeResponse.self, from: data)
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+        throw lastError ?? APIError.invalidResponse
     }
 
     func enableTunnel(_ enabled: Bool) async throws -> TunnelResponse {
-        let data = try await request("/api/network/tunnel", method: "POST", body: ["enabled": enabled])
-        let response = try JSONDecoder().decode(TunnelResponse.self, from: data)
-        return response
+        let paths = ["/api/mobile/tunnel", "/api/mobile/tunnel/enable"]
+        var lastError: Error?
+        for path in paths {
+            do {
+                let data = try await request(path, method: "POST", body: ["enabled": enabled])
+                return try JSONDecoder().decode(TunnelResponse.self, from: data)
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+        throw lastError ?? APIError.invalidResponse
+    }
+
+    // MARK: - 消息转换
+
+    private func transformMessages(_ rawMessages: [RawMessage]) -> [Message] {
+        var result: [Message] = []
+
+        for msg in rawMessages {
+            let msgId = msg.id ?? "\(msg.type ?? "unknown")-\(msg.timestamp ?? "")-\(result.count)"
+            let timestamp = msg.timestamp ?? ""
+
+            // 用户消息
+            if msg.type == "user" {
+                let text = extractText(msg.content)
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    result.append(Message(
+                        id: msgId,
+                        type: .userText,
+                        content: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        timestamp: timestamp
+                    ))
+                }
+                continue
+            }
+
+            // 助手消息
+            if msg.type == "assistant" {
+                if let content = msg.content {
+                    if let blocks = content.value as? [[String: Any]] {
+                        for (blockIdx, block) in blocks.enumerated() {
+                            let blockType = block["type"] as? String ?? ""
+
+                            if blockType == "text" {
+                                let text = (block["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !text.isEmpty {
+                                    result.append(Message(
+                                        id: "\(msgId)-text-\(blockIdx)",
+                                        type: .assistantText,
+                                        content: text,
+                                        timestamp: timestamp
+                                    ))
+                                }
+                            } else if blockType == "tool_use" {
+                                let toolName = block["name"] as? String ?? "Unknown"
+                                let toolInput = (block["input"] as? [String: Any] ?? [:]).mapValues { AnyCodable(value: $0) }
+                                result.append(Message(
+                                    id: "\(msgId)-tool-\(blockIdx)",
+                                    type: .toolUse,
+                                    content: "",
+                                    timestamp: timestamp,
+                                    toolName: toolName,
+                                    toolInput: toolInput
+                                ))
+                            } else if blockType == "thinking" {
+                                let text = (block["thinking"] as? String ?? block["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !text.isEmpty {
+                                    result.append(Message(
+                                        id: "\(msgId)-thinking-\(blockIdx)",
+                                        type: .thinking,
+                                        content: text,
+                                        timestamp: timestamp
+                                    ))
+                                }
+                            }
+                        }
+                    } else if let text = content.value as? String {
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            result.append(Message(
+                                id: msgId,
+                                type: .assistantText,
+                                content: trimmed,
+                                timestamp: timestamp
+                            ))
+                        }
+                    }
+                }
+                continue
+            }
+
+            // 工具结果消息
+            if msg.type == "tool_result" {
+                var resultContent = ""
+                if let content = msg.content {
+                    if let text = content.value as? String {
+                        resultContent = text
+                    } else if let blocks = content.value as? [[String: Any]] {
+                        resultContent = blocks.compactMap { $0["text"] as? String }.joined()
+                    } else {
+                        resultContent = String(describing: content.value)
+                    }
+                }
+
+                let isError = msg.isError ?? false
+                result.append(Message(
+                    id: msgId,
+                    type: .toolResult,
+                    content: "",
+                    timestamp: timestamp,
+                    toolResult: resultContent,
+                    toolStatus: isError ? .failed : .completed
+                ))
+                continue
+            }
+
+            // thinking 消息
+            if msg.type == "thinking" {
+                let text = (msg.thinking ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    result.append(Message(
+                        id: msgId,
+                        type: .thinking,
+                        content: text,
+                        timestamp: timestamp
+                    ))
+                }
+            }
+        }
+
+        // 配对 tool_use 和 tool_result
+        pairToolResults(&result)
+
+        return result
+    }
+
+    private func extractText(_ content: AnyCodable?) -> String {
+        guard let content = content else { return "" }
+        if let text = content.value as? String {
+            return text
+        } else if let blocks = content.value as? [[String: Any]] {
+            return blocks
+                .filter { $0["type"] as? String == "text" }
+                .compactMap { $0["text"] as? String }
+                .joined()
+        } else if let dict = content.value as? [String: Any], let text = dict["text"] as? String {
+            return text
+        }
+        return ""
+    }
+
+    private func pairToolResults(_ messages: inout [Message]) {
+        var toRemove: Set<Int> = []
+
+        for i in 0..<messages.count {
+            if messages[i].type == .toolResult {
+                for j in stride(from: i - 1, through: 0, by: -1) {
+                    if messages[j].type == .toolUse && messages[j].toolResult == nil {
+                        messages[j].toolResult = messages[i].toolResult
+                        messages[j].toolStatus = messages[i].toolStatus ?? .completed
+                        toRemove.insert(i)
+                        break
+                    }
+                }
+            }
+        }
+
+        if !toRemove.isEmpty {
+            messages = messages.enumerated().filter { !toRemove.contains($0.offset) }.map { $0.element }
+        }
     }
 
     // MARK: - 私有方法
@@ -110,9 +330,8 @@ class APIService {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        if let body = body {
+        if body != nil {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try? JSONEncoder().encode(body)
         }
 
@@ -123,7 +342,11 @@ class APIService {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw APIError.httpError(httpResponse.statusCode)
+            if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = errorJson["message"] as? String {
+                throw APIError.httpError(httpResponse.statusCode, message)
+            }
+            throw APIError.httpError(httpResponse.statusCode, nil)
         }
 
         return data
@@ -139,7 +362,6 @@ class APIService {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -148,7 +370,7 @@ class APIService {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            throw APIError.httpError(httpResponse.statusCode)
+            throw APIError.httpError(httpResponse.statusCode, nil)
         }
 
         return data
@@ -157,13 +379,38 @@ class APIService {
 
 // MARK: - 响应模型
 
-struct ProviderTestResult: Codable {
-    let result: TestResult
+struct SessionsResponse: Codable {
+    let sessions: [Session]
+}
 
-    struct TestResult: Codable {
-        let connectivity: Connectivity
+struct MessagesResponse: Codable {
+    let messages: [RawMessage?]
+}
 
-        struct Connectivity: Codable {
+struct CreateSessionResponse: Codable {
+    let sessionId: String
+}
+
+struct RecentProjectsResponse: Codable {
+    let projects: [RecentProject]
+}
+
+struct ProvidersResponse: Codable {
+    let providers: [Provider]
+    let activeId: String?
+}
+
+struct ProviderResponse: Codable {
+    let provider: Provider
+}
+
+struct ProviderTestResultResponse: Codable {
+    let result: ProviderTestResult
+
+    struct ProviderTestResult: Codable {
+        let connectivity: ConnectivityResult
+
+        struct ConnectivityResult: Codable {
             let success: Bool
             let latencyMs: Int?
             let error: String?
@@ -171,20 +418,89 @@ struct ProviderTestResult: Codable {
     }
 }
 
+struct ModelsResponse: Codable {
+    let models: [ModelInfo]
+    let provider: ProviderInfo?
+}
+
+struct CurrentModelResponse: Codable {
+    let model: ModelInfo
+}
+
+struct ModelInfo: Codable {
+    let id: String
+    let name: String
+    let description: String?
+}
+
+struct ProviderInfo: Codable {
+    let id: String
+    let name: String
+}
+
+struct EffortResponse: Codable {
+    let level: String
+    let available: [String]
+}
+
+// 原始消息格式
+struct RawMessage: Codable {
+    let id: String?
+    let type: String?
+    let content: AnyCodable?
+    let timestamp: String?
+    let isError: Bool?
+    let thinking: String?
+}
+
+// 网络信息
 struct NetworkInfo: Codable {
-    let lanUrl: String
+    let lanUrl: String?
     let tunnelUrl: String?
     let tunnelEnabled: Bool
+    let serverPort: Int
 }
 
+// 配对码响应
 struct PairingCodeResponse: Codable {
     let pairingCode: String
-    let expiresAt: String
+    let expiresAt: Int
+    let createdAt: Int
 }
 
+// 隧道响应
 struct TunnelResponse: Codable {
+    let ok: Bool
     let tunnelUrl: String?
-    let enabled: Bool
+    let error: String?
+}
+
+// 服务商输入
+struct ProviderInput: Codable {
+    let presetId: String
+    let name: String
+    let apiKey: String
+    let baseUrl: String
+    let apiFormat: ApiFormat?
+    let models: ModelMapping
+    let notes: String?
+}
+
+struct ProviderTestOverrides: Codable {
+    let baseUrl: String?
+    let modelId: String?
+    let apiFormat: String?
+}
+
+// 服务商测试结果
+struct ProviderTestResult: Codable {
+    let connectivity: ConnectivityResult
+
+    struct ConnectivityResult: Codable {
+        let success: Bool
+        let latencyMs: Int?
+        let error: String?
+    }
 }
 
 // MARK: - 错误类型
@@ -192,7 +508,7 @@ struct TunnelResponse: Codable {
 enum APIError: Error, LocalizedError {
     case invalidURL
     case invalidResponse
-    case httpError(Int)
+    case httpError(Int, String?)
     case decodingError
 
     var errorDescription: String? {
@@ -201,7 +517,10 @@ enum APIError: Error, LocalizedError {
             return "无效的 URL"
         case .invalidResponse:
             return "无效的响应"
-        case .httpError(let code):
+        case .httpError(let code, let message):
+            if let msg = message {
+                return "HTTP 错误 \(code): \(msg)"
+            }
             return "HTTP 错误: \(code)"
         case .decodingError:
             return "数据解析错误"
