@@ -24,7 +24,7 @@ class SessionStore: ObservableObject {
     @Published var recentProjects: [RecentProject] = []
 
     // WebSocket 服务
-    private var webSocketService = WebSocketService.shared
+    var webSocketService = WebSocketService.shared
     private var cancellables = Set<AnyCancellable>()
 
     // 本地存储目录
@@ -561,6 +561,25 @@ class SessionStore: ObservableObject {
     func addMessage(_ sessionId: String, _ message: Message) {
         var sessionMessages = messages[sessionId] ?? []
         sessionMessages.append(message)
+        messages[sessionId] = sessionMessages
+    }
+
+    func updateToolResult(_ sessionId: String, _ toolUseId: String, _ result: String, _ status: ToolStatus) {
+        var sessionMessages = messages[sessionId] ?? []
+        guard let index = sessionMessages.firstIndex(where: { $0.id == toolUseId }) else { return }
+
+        let msg = sessionMessages[index]
+        let updatedMsg = Message(
+            id: msg.id,
+            type: msg.type,
+            content: msg.content,
+            timestamp: msg.timestamp,
+            toolName: msg.toolName,
+            toolInput: msg.toolInput,
+            toolResult: result,
+            toolStatus: status
+        )
+        sessionMessages[index] = updatedMsg
         messages[sessionId] = sessionMessages
     }
 

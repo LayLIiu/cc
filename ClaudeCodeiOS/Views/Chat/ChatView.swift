@@ -19,8 +19,12 @@ struct ChatView: View {
     @State private var contextUsage: Int = 0
     @State private var previousStatus: SessionStatus = .idle
     @State private var scrollToBottomTrigger = false
-    @State private var isAtBottom = true  // 是否在最新消息位置
-    @State private var showScrollButton = false  // 是否显示"最新消息"按钮
+    @State private var isAtBottom = true
+    @State private var showScrollButton = false
+    @State private var processedMsgIds = Set<String>()  // 去重
+    @State private var addedMessageContents = Set<String>()  // 用户消息内容去重（防止本地+echo重复）
+    @State private var inTextBlock = false
+    @State private var inThinkingBlock = false
 
     @FocusState private var isInputFocused: Bool
 
@@ -135,6 +139,11 @@ struct ChatView: View {
             if let usage = sessionStore.contextUsages[sessionId] {
                 contextUsage = usage
             }
+        }
+        // 实时监听 WebSocket 消息 - 直接更新 UI
+        .onReceive(sessionStore.webSocketService.$lastMessage) { wsMessage in
+            guard let msg = wsMessage else { return }
+            handleWSMessage(msg)
         }
         .onDisappear {
             sessionStore.disconnectWebSocket()
@@ -319,11 +328,147 @@ struct ChatView: View {
         }
     }
 
+    // MARK: - WebSocket 消息处理（实时更新 UI）
+
+    private func handleWSMessage(_ msg: WSMessage) {
+        // 去重
+        let msgId = "\(msg.type.rawValue)-\(msg.timestamp ?? "")"
+        guard !processedMsgIds.contains(msgId) else { return }
+        processedMsgIds.insert(msgId)
+        if processedMsgIds.count > 200 {
+            processedMsgIds = Set(Array(processedMsgIds.suffix(100)))
+        }
+
+        // 只处理当前会话
+        let targetId = msg.sessionId ?? sessionId
+        guard targetId == sessionId else { return }
+
+        switch msg.type {
+        case .contentStart:
+            if chatStatus == .idle || chatStatus == .completed { chatStatus = .streaming }
+            if msg.blockType == "text" { inTextBlock = true; streamingText = "" }
+
+        case .contentDelta:
+            if chatStatus == .idle || chatStatus == .completed { chatStatus = .streaming }
+            if let text = msg.text { streamingText += text }
+
+        case .thinking:
+            if chatStatus == .idle || chatStatus == .completed { chatStatus = .thinking }
+            if !inThinkingBlock { inThinkingBlock = true; streamingThinking = "" }
+            if let text = msg.text { streamingThinking += text }
+
+        case .toolUseComplete:
+            flushStreaming()
+            if let toolName = msg.toolName {
+                let toolMsg = Message(
+                    id: msg.toolUseId ?? UUID().uuidString, type: .toolUse, content: "",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    toolName: toolName, toolInput: msg.input, toolResult: nil, toolStatus: .running
+                )
+                sessionStore.addMessage(sessionId, toolMsg)
+            }
+            chatStatus = .toolExecuting
+
+        case .toolResult:
+            if let toolUseId = msg.toolUseId, let content = msg.content {
+                let resultStr = (content.value as? String) ?? String(describing: content.value)
+                sessionStore.updateToolResult(sessionId, toolUseId, resultStr, msg.isError == true ? .failed : .completed)
+            }
+
+        case .messageComplete:
+            flushStreaming()
+            chatStatus = .completed
+            sessionStore.sessionStatuses[sessionId] = .completed
+            sessionStore.saveMessagesToLocal(sessionId)
+
+        case .status:
+            if let state = msg.state {
+                let working = ["thinking", "tool_executing", "streaming", "permission_pending", "question_pending"]
+                if working.contains(state) {
+                    chatStatus = SessionStatus(rawValue: state) ?? .streaming
+                    sessionStore.sessionStatuses[sessionId] = chatStatus
+                } else if state == "completed" {
+                    chatStatus = .completed
+                    sessionStore.sessionStatuses[sessionId] = .completed
+                }
+            }
+
+        case .permissionRequest:
+            if let requestId = msg.requestId {
+                let permMsg = Message(
+                    id: "permission-\(requestId)", type: .permissionRequest,
+                    content: msg.description ?? "权限请求: \(msg.toolName ?? "")",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    toolName: msg.toolName, permissionId: requestId, permissionDescription: msg.description
+                )
+                sessionStore.addMessage(sessionId, permMsg)
+                chatStatus = .permissionPending
+            }
+
+        case .question:
+            if let questionId = msg.questionId {
+                let qMsg = Message(
+                    id: "question-\(questionId)", type: .question,
+                    content: msg.questionText ?? "",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    questionId: questionId, options: msg.options ?? []
+                )
+                sessionStore.addMessage(sessionId, qMsg)
+                chatStatus = .questionPending
+            }
+
+        case .tokenUsage:
+            if let p = msg.percentage { contextUsage = Int(p * 100); sessionStore.contextUsages[sessionId] = contextUsage }
+
+        case .sessionTitleUpdated:
+            if let title = msg.title { sessionStore.updateSessionTitle(sessionId, title) }
+
+        case .userMessageEcho:
+            if let contentValue = msg.content?.value {
+                let str = contentValue is String ? (contentValue as! String) : String(describing: contentValue)
+                // 用内容去重，防止本地发送和 echo 重复
+                let contentKey = "user-\(str)"
+                guard !addedMessageContents.contains(contentKey) else { return }
+                addedMessageContents.insert(contentKey)
+                let userMsg = Message(
+                    id: msg.id ?? "user-\(UUID().uuidString)", type: .userText, content: str,
+                    timestamp: msg.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                )
+                sessionStore.addMessage(sessionId, userMsg)
+            }
+
+        case .connected, .error:
+            break
+        }
+    }
+
+    private func flushStreaming() {
+        if !streamingText.isEmpty {
+            let textMsg = Message(
+                id: "ws-text-\(UUID().uuidString)", type: .assistantText, content: streamingText,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+            sessionStore.addMessage(sessionId, textMsg)
+            streamingText = ""; inTextBlock = false
+        }
+        if !streamingThinking.isEmpty {
+            let thinkMsg = Message(
+                id: "ws-think-\(UUID().uuidString)", type: .thinking, content: streamingThinking,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+            sessionStore.addMessage(sessionId, thinkMsg)
+            streamingThinking = ""; inThinkingBlock = false
+        }
+    }
+
     private func sendMessage() {
         guard !inputText.isEmpty else { return }
 
         let content = inputText
         inputText = ""
+
+        // 标记内容已添加，防止 echo 重复
+        addedMessageContents.insert("user-\(content)")
 
         // 添加用户消息
         let userMessage = Message(
@@ -340,6 +485,8 @@ struct ChatView: View {
         // 重置状态
         streamingText = ""
         streamingThinking = ""
+        inTextBlock = false
+        inThinkingBlock = false
         chatStatus = .thinking
     }
 }
