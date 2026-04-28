@@ -5,6 +5,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject var authStore: AuthStore
     @EnvironmentObject var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -33,6 +34,7 @@ struct MainTabView: View {
     @EnvironmentObject var appState: AppState
     @EnvironmentObject var sessionStore: SessionStore
     @EnvironmentObject var authStore: AuthStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -75,6 +77,16 @@ struct MainTabView: View {
             // 当有待导航会话时，切换到会话标签
             if newValue != nil && selectedTab != "sessions" {
                 selectedTab = "sessions"
+            }
+        }
+        .onChange(of: scenePhase) { oldPhase, newPhase in
+            // App 从后台返回前台时，重新连接 WebSocket
+            if oldPhase == .background && newPhase == .active {
+                print("[MainTabView] App returned to foreground, reconnecting WebSocket...")
+                let serverUrl = authStore.serverUrl
+                if !serverUrl.isEmpty {
+                    sessionStore.reconnectAllWebSocket(serverUrl: serverUrl)
+                }
             }
         }
         .task {

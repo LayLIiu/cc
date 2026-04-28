@@ -3,6 +3,13 @@
 import SwiftUI
 import Combine
 
+// 复用 DateFormatter，避免重复创建
+private let sharedDateFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
 class SessionStore: ObservableObject {
     // 会话列表
     @Published var sessions: [Session] = []
@@ -83,39 +90,47 @@ class SessionStore: ObservableObject {
         return groups.filter { !$0.1.isEmpty }
     }
 
+    // 静态 DateFormatter 实例，避免重复创建
+    private static let timestampFormatters: [ISO8601DateFormatter] = {
+        let f1 = ISO8601DateFormatter()
+        f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let f2 = ISO8601DateFormatter()
+        f2.formatOptions = [.withInternetDateTime]
+
+        let f3 = ISO8601DateFormatter()
+        f3.formatOptions = [.withFullDate, .withFullTime, .withFractionalSeconds]
+
+        let f4 = ISO8601DateFormatter()
+        f4.formatOptions = [.withFullDate, .withFullTime]
+
+        return [f1, f2, f3, f4]
+    }()
+
+    private static let fallbackFormatter1: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        return f
+    }()
+
+    private static let fallbackFormatter2: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
+        return f
+    }()
+
     private func parseTimestamp(_ timestamp: String) -> Date {
-        let formatters: [ISO8601DateFormatter] = {
-            // 尝试多种格式
-            let f1 = ISO8601DateFormatter()
-            f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-            let f2 = ISO8601DateFormatter()
-            f2.formatOptions = [.withInternetDateTime]
-
-            let f3 = ISO8601DateFormatter()
-            f3.formatOptions = [.withFullDate, .withFullTime, .withFractionalSeconds]
-
-            let f4 = ISO8601DateFormatter()
-            f4.formatOptions = [.withFullDate, .withFullTime]
-
-            return [f1, f2, f3, f4]
-        }()
-
-        for formatter in formatters {
+        for formatter in Self.timestampFormatters {
             if let date = formatter.date(from: timestamp) {
                 return date
             }
         }
 
-        // 最后尝试用 DateFormatter
-        let fallbackFormatter = DateFormatter()
-        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
-        if let date = fallbackFormatter.date(from: timestamp) {
+        if let date = Self.fallbackFormatter1.date(from: timestamp) {
             return date
         }
 
-        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
-        if let date = fallbackFormatter.date(from: timestamp) {
+        if let date = Self.fallbackFormatter2.date(from: timestamp) {
             return date
         }
 
@@ -264,7 +279,7 @@ class SessionStore: ObservableObject {
                             id: message.id ?? "user-\(UUID().uuidString)",
                             type: .user,
                             content: contentString,
-                            timestamp: message.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                            timestamp: message.timestamp ?? sharedDateFormatter.string(from: Date())
                         )
                         self.addMessage(sessionId, userMsg)
                         print("[SessionStore] ✅ Added user message to session \(sessionId)")
@@ -301,7 +316,7 @@ class SessionStore: ObservableObject {
             id: "assistant-streaming-\(UUID().uuidString)",
             type: .assistant,
             content: "",
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            timestamp: sharedDateFormatter.string(from: Date())
         )
         sessionMessages.append(newMessage)
         messages[sessionId] = sessionMessages
@@ -462,7 +477,7 @@ class SessionStore: ObservableObject {
                     id: wsMessage.id ?? "user-\(UUID().uuidString)",
                     type: .user,
                     content: contentString,
-                    timestamp: wsMessage.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                    timestamp: wsMessage.timestamp ?? sharedDateFormatter.string(from: Date())
                 )
                 addMessage(sessionId, userMessage)
                 saveMessagesToLocal(sessionId)
@@ -472,7 +487,6 @@ class SessionStore: ObservableObject {
 
     private func appendStreamingText(_ sessionId: String, _ text: String) {
         var sessionMessages = messages[sessionId] ?? []
-        print("[SessionStore] 📝 appendStreamingText for \(sessionId), text length: \(text.count), messages count: \(sessionMessages.count)")
 
         // 查找最后一条助手消息
         if let lastIndex = sessionMessages.indices.last,
@@ -492,29 +506,19 @@ class SessionStore: ObservableObject {
                 isStreaming: true
             )
             sessionMessages[lastIndex] = updatedMsg
-
-            // 强制触发更新
-            messages[sessionId] = nil
             messages[sessionId] = sessionMessages
-            print("[SessionStore] 📝 Updated existing message, content length: \(newContent.count)")
         } else {
-            // 创建新的助手消息 - 更新会话时间
+            // 创建新的助手消息
             let newMessage = Message(
                 id: "assistant-\(UUID().uuidString)",
                 type: .assistant,
                 content: text,
-                timestamp: ISO8601DateFormatter().string(from: Date()),
+                timestamp: sharedDateFormatter.string(from: Date()),
                 isStreaming: true
             )
             sessionMessages.append(newMessage)
-
-            // 强制触发更新
-            messages[sessionId] = nil
             messages[sessionId] = sessionMessages
-
-            // 更新会话的最后修改时间
             touchSession(sessionId)
-            print("[SessionStore] 📝 Created new message, total count: \(sessionMessages.count)")
         }
     }
 
@@ -537,19 +541,18 @@ class SessionStore: ObservableObject {
                 toolStatus: msg.toolStatus
             )
             sessionMessages[lastIndex] = updatedMsg
+            messages[sessionId] = sessionMessages
         } else {
             // 创建新的思考消息
             let newMessage = Message(
                 id: "thinking-\(UUID().uuidString)",
                 type: .thinking,
                 content: text,
-                timestamp: ISO8601DateFormatter().string(from: Date())
+                timestamp: sharedDateFormatter.string(from: Date())
             )
             sessionMessages.append(newMessage)
+            messages[sessionId] = sessionMessages
         }
-
-        // 强制触发 UI 更新
-        messages[sessionId] = sessionMessages
     }
 
     private func addToolUseMessage(_ sessionId: String, _ toolName: String, _ toolUseId: String?, _ input: [String: AnyCodable]?, _ status: ToolStatus) {
@@ -557,7 +560,7 @@ class SessionStore: ObservableObject {
             id: toolUseId ?? UUID().uuidString,
             type: .toolUse,
             content: "",
-            timestamp: ISO8601DateFormatter().string(from: Date()),
+            timestamp: sharedDateFormatter.string(from: Date()),
             toolName: toolName,
             toolInput: input,
             toolResult: nil,
@@ -624,7 +627,7 @@ class SessionStore: ObservableObject {
             id: "permission-\(requestId)",
             type: .user,
             content: description ?? "权限请求: \(toolName)",
-            timestamp: ISO8601DateFormatter().string(from: Date()),
+            timestamp: sharedDateFormatter.string(from: Date()),
             toolName: toolName,
             permissionId: requestId,
             permissionDescription: description
@@ -638,7 +641,7 @@ class SessionStore: ObservableObject {
             id: "question-\(questionId)",
             type: .user,
             content: questionText,
-            timestamp: ISO8601DateFormatter().string(from: Date()),
+            timestamp: sharedDateFormatter.string(from: Date()),
             questionId: questionId,
             options: options
         )
@@ -838,7 +841,7 @@ class SessionStore: ObservableObject {
     func touchSession(_ sessionId: String) {
         if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
             let old = sessions[index]
-            let now = ISO8601DateFormatter().string(from: Date())
+            let now = sharedDateFormatter.string(from: Date())
             sessions[index] = Session(
                 id: old.id,
                 title: old.title,
@@ -888,7 +891,7 @@ class SessionStore: ObservableObject {
                 workDir: old.workDir,
                 workDirExists: old.workDirExists,
                 createdAt: old.createdAt,
-                modifiedAt: ISO8601DateFormatter().string(from: Date()),
+                modifiedAt: sharedDateFormatter.string(from: Date()),
                 messageCount: old.messageCount
             )
             saveSessions()
@@ -924,6 +927,26 @@ class SessionStore: ObservableObject {
         guard globalWSSubscribed else { return }
         let sessionIds = sessions.map { $0.id }
         webSocketService.subscribeToAllSessions(serverUrl: serverUrl, sessionIds: sessionIds)
+    }
+
+    /// 重新连接所有 WebSocket（App 从后台返回前台时调用）
+    func reconnectAllWebSocket(serverUrl: String) {
+        guard !serverUrl.isEmpty else { return }
+        print("[SessionStore] 🔄 Reconnecting all WebSocket connections...")
+
+        // 断开所有现有连接
+        webSocketService.disconnectAllGlobal()
+
+        // 清理状态
+        globalWSSubscribed = false
+
+        // 重新订阅所有会话
+        let sessionIds = sessions.map { $0.id }
+        if !sessionIds.isEmpty {
+            webSocketService.subscribeToAllSessions(serverUrl: serverUrl, sessionIds: sessionIds)
+            globalWSSubscribed = true
+            print("[SessionStore] ✅ Reconnected to \(sessionIds.count) sessions")
+        }
     }
 
     func connectWebSocket(serverUrl: String, sessionId: String) {

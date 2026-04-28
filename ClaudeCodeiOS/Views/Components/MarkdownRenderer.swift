@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 // MARK: - AST 节点
 
-enum MarkdownNode {
+enum MarkdownNode: Equatable {
     case codeBlock(language: String, code: String)
     case heading(level: Int, text: String)
     case unorderedListItem(text: String)
@@ -15,10 +15,30 @@ enum MarkdownNode {
     case spacer
 }
 
+// MARK: - 解析缓存
+
+private class MarkdownCache {
+    static let shared = MarkdownCache()
+    private var cache = NSCache<NSString, NSArray>()
+
+    func getNodes(for content: String) -> [MarkdownNode]? {
+        cache.object(forKey: content as NSString) as? [MarkdownNode]
+    }
+
+    func setNodes(_ nodes: [MarkdownNode], for content: String) {
+        cache.setObject(nodes as NSArray, forKey: content as NSString)
+    }
+}
+
 // MARK: - 解析器
 
 struct MarkdownParser {
     static func parse(_ content: String) -> [MarkdownNode] {
+        // 检查缓存
+        if let cached = MarkdownCache.shared.getNodes(for: content) {
+            return cached
+        }
+
         var nodes: [MarkdownNode] = []
         let lines = content.components(separatedBy: "\n")
         var i = 0
@@ -91,18 +111,43 @@ struct MarkdownParser {
             i += 1
         }
 
+        // 缓存结果
+        MarkdownCache.shared.setNodes(nodes, for: content)
         return nodes
     }
 }
 
-// MARK: - 内联元素渲染
+// MARK: - 内联元素渲染（优化版：缓存 AttributedString）
+
+private class InlineTextCache {
+    static let shared = InlineTextCache()
+    private var cache = NSCache<NSString, NSAttributedString>()
+
+    func getAttributed(for text: String) -> AttributedString? {
+        guard let nsAttr = cache.object(forKey: text as NSString) else { return nil }
+        return AttributedString(nsAttr)
+    }
+
+    func setAttributed(_ attr: AttributedString, for text: String) {
+        let nsAttr = NSAttributedString(attr)
+        cache.setObject(nsAttr, forKey: text as NSString)
+    }
+}
 
 struct InlineText: View {
     let text: String
 
     var body: some View {
+        Text(getOrCreateAttributedText())
+    }
+
+    private func getOrCreateAttributedText() -> AttributedString {
+        if let cached = InlineTextCache.shared.getAttributed(for: text) {
+            return cached
+        }
         let attributed = parseInlineElements(text)
-        Text(attributed)
+        InlineTextCache.shared.setAttributed(attributed, for: text)
+        return attributed
     }
 
     private func parseInlineElements(_ text: String) -> AttributedString {

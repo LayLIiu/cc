@@ -2,6 +2,13 @@
 
 import SwiftUI
 
+// 复用 DateFormatter，避免重复创建
+private let sharedDateFormatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+}()
+
 struct ChatView: View {
     let sessionId: String
     @Binding var hideTabBar: Bool
@@ -17,6 +24,11 @@ struct ChatView: View {
     @State private var streamingThinking = ""
     @State private var inTextBlock = false
     @State private var inThinkingBlock = false
+
+    // 分页加载 - 性能优化
+    @State private var displayedMessageCount = 50  // 初始显示 50 条
+    @State private var isLoadingMore = false
+    @State private var hasMoreMessages = false
 
     // 是否是浅色主题
     private var isLightTheme: Bool {
@@ -42,9 +54,19 @@ struct ChatView: View {
         sessionStore.messages[sessionId] ?? []
     }
 
-    // 合并 store 消息 + 本地流式消息（参考 RN 架构）
+    // 分页后的消息（只显示最近 N 条）
+    var visibleMessages: [Message] {
+        let allMessages = messages
+        if allMessages.count <= displayedMessageCount {
+            return allMessages
+        }
+        // 显示最近的 N 条消息
+        return Array(allMessages.suffix(displayedMessageCount))
+    }
+
+    // 合并 store 消息 + 本地流式消息
     var allMessages: [Message] {
-        var result = messages
+        var result = visibleMessages
 
         // 添加流式思考（正在生成）
         if !streamingThinking.isEmpty {
@@ -52,7 +74,7 @@ struct ChatView: View {
                 id: "streaming-thinking",
                 type: .thinking,
                 content: streamingThinking,
-                timestamp: ISO8601DateFormatter().string(from: Date()),
+                timestamp: sharedDateFormatter.string(from: Date()),
                 isStreaming: true
             ))
         }
@@ -63,7 +85,7 @@ struct ChatView: View {
                 id: "streaming-text",
                 type: .assistant,
                 content: streamingText,
-                timestamp: ISO8601DateFormatter().string(from: Date()),
+                timestamp: sharedDateFormatter.string(from: Date()),
                 isStreaming: true
             ))
         }
@@ -150,6 +172,9 @@ struct ChatView: View {
             // 更新会话的最后修改时间（让会话移动到"今天"分组）
             sessionStore.touchSession(sessionId)
 
+            // 初始化分页状态
+            updatePaginationState()
+
             // 先从服务端拉取最新消息（可能桌面端已产生新消息）
             await fetchLatestMessages()
 
@@ -181,6 +206,8 @@ struct ChatView: View {
         // 监听 messages 变化 - 滚动到底部
         .onChange(of: sessionStore.messages[sessionId]?.count ?? 0) { oldValue, newValue in
             print("[ChatView] Messages count changed: \(oldValue) -> \(newValue)")
+            // 更新分页状态
+            updatePaginationState()
             if newValue > oldValue && !userIsViewingHistory {
                 // 新消息到达，只有在用户没有在查看历史时才滚动
                 scrollToBottomTrigger.toggle()
@@ -251,9 +278,31 @@ struct ChatView: View {
                     .id(message.id)
                 }
 
+                // 加载更多历史消息（在倒序列表中出现在顶部）
+                if hasMoreMessages {
+                    Button {
+                        loadMoreMessages()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if isLoadingMore {
+                                ProgressView()
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "arrow.up")
+                                    .font(.system(size: 10))
+                            }
+                            Text("加载更早消息")
+                                .font(.system(size: 12))
+                        }
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 8)
+                    }
+                    .rotationEffect(.degrees(180))
+                }
+
                 // 消息数量提示（在倒序列表中出现在底部）
                 if !messages.isEmpty {
-                    Text("\(messages.count) 条消息")
+                    Text(hasMoreMessages ? "已显示 \(displayedMessageCount)/\(messages.count) 条" : "\(messages.count) 条消息")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -266,6 +315,33 @@ struct ChatView: View {
         }
         .rotationEffect(.degrees(180))  // 整体翻转，使最新消息在底部
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    // 加载更多历史消息
+    private func loadMoreMessages() {
+        guard !isLoadingMore, hasMoreMessages else { return }
+        isLoadingMore = true
+
+        // 异步加载，避免阻塞 UI
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            let increment = 30
+            let newCount = min(displayedMessageCount + increment, messages.count)
+            displayedMessageCount = newCount
+            hasMoreMessages = displayedMessageCount < messages.count
+            isLoadingMore = false
+        }
+    }
+
+    // 更新分页状态
+    private func updatePaginationState() {
+        let totalCount = messages.count
+        // 如果消息数少于已显示数，重置为显示全部
+        if totalCount <= displayedMessageCount {
+            displayedMessageCount = totalCount
+            hasMoreMessages = false
+        } else {
+            hasMoreMessages = true
+        }
     }
 
     private var statusText: String {
@@ -415,7 +491,7 @@ struct ChatView: View {
                     id: msg.toolUseId ?? "tool-\(UUID().uuidString)",
                     type: .toolUse,
                     content: "",
-                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    timestamp: sharedDateFormatter.string(from: Date()),
                     toolName: toolName,
                     toolInput: msg.input,
                     toolStatus: .running
@@ -509,7 +585,7 @@ struct ChatView: View {
                         id: msg.id ?? "user-\(UUID().uuidString)",
                         type: .user,
                         content: contentString,
-                        timestamp: msg.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                        timestamp: msg.timestamp ?? sharedDateFormatter.string(from: Date())
                     )
                     sessionStore.addMessage(sessionId, userMsg)
                 }
@@ -532,7 +608,7 @@ struct ChatView: View {
                     id: "assistant-\(UUID().uuidString)",
                     type: .assistant,
                     content: streamingText,
-                    timestamp: ISO8601DateFormatter().string(from: Date())
+                    timestamp: sharedDateFormatter.string(from: Date())
                 )
                 sessionStore.addMessage(sessionId, textMsg)
             }
@@ -544,7 +620,7 @@ struct ChatView: View {
                 id: "thinking-\(UUID().uuidString)",
                 type: .thinking,
                 content: streamingThinking,
-                timestamp: ISO8601DateFormatter().string(from: Date())
+                timestamp: sharedDateFormatter.string(from: Date())
             )
             sessionStore.addMessage(sessionId, thinkMsg)
             streamingThinking = ""
@@ -568,7 +644,7 @@ struct ChatView: View {
             id: "user-\(UUID().uuidString)",
             type: .user,
             content: content,
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            timestamp: sharedDateFormatter.string(from: Date())
         )
         sessionStore.addMessage(sessionId, userMessage)
 

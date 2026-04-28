@@ -508,11 +508,14 @@ extension WebSocketService: URLSessionWebSocketDelegate {
             self.connectionStatus = .disconnected
             print("[WebSocket] Disconnected")
 
-            // 更新全局连接状态
+            // 更新全局连接状态并触发重连
             if let sid = sessionId, var conn = self.globalConnections[sid] {
                 conn.status = .disconnected
+                conn.task = nil  // 清空 task
                 self.globalConnections[sid] = conn
-                print("[GlobalWS] 🔌 WebSocket task closed for \(sid)")
+                print("[GlobalWS] 🔌 WebSocket task closed for \(sid), scheduling reconnect...")
+                // 断开后自动重连
+                self.scheduleGlobalReconnect(sessionId: sid)
             }
         }
     }
