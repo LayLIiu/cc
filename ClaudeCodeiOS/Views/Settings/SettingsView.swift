@@ -3,9 +3,10 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Binding var hideTabBar: Bool
+    @Binding var animateTabBar: Bool
     @EnvironmentObject var authStore: AuthStore
     @EnvironmentObject var appState: AppState
-    @EnvironmentObject var sessionStore: SessionStore
 
     @State private var showLanModal = false
     @State private var showTunnelModal = false
@@ -24,6 +25,11 @@ struct SettingsView: View {
     // 是否是浅色主题
     private var isLightTheme: Bool {
         appState.themeMode == .light
+    }
+
+    init(hideTabBar: Binding<Bool> = .constant(false), animateTabBar: Binding<Bool> = .constant(false)) {
+        self._hideTabBar = hideTabBar
+        self._animateTabBar = animateTabBar
     }
 
     var body: some View {
@@ -69,6 +75,27 @@ struct SettingsView: View {
                 }
             }
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: String.self) { value in
+                Group {
+                    switch value {
+                    case "import":
+                        ImportView()
+                    case "storage":
+                        StorageInfoView()
+                    case "changelog":
+                        ChangelogView()
+                    default:
+                        EmptyView()
+                    }
+                }
+                .onAppear {
+                    hideTabBar = true
+                }
+                .onDisappear {
+                    animateTabBar = true
+                    hideTabBar = false
+                }
+            }
         }
         .sheet(isPresented: $showLanModal) {
             UrlEditSheet(
@@ -228,7 +255,7 @@ struct SettingsView: View {
                 .disabled(testingLatency || authStore.serverUrl.isEmpty)
             }
             .padding(12)
-            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+            .background(.ultraThinMaterial)
             .cornerRadius(12)
 
             Text("局域网适合在家使用，公网适合外出使用")
@@ -270,7 +297,7 @@ struct SettingsView: View {
             sectionTitle("数据管理")
 
             // 导入对话
-            NavigationLink(destination: ImportView()) {
+            NavigationLink(value: "import") {
                 HStack {
                     Image(systemName: "square.and.arrow.down")
                         .font(.title2)
@@ -299,7 +326,7 @@ struct SettingsView: View {
             .buttonStyle(.plain)
 
             // 存储管理
-            NavigationLink(destination: StorageInfoView()) {
+            NavigationLink(value: "storage") {
                 HStack {
                     Image(systemName: "internaldrive")
                         .font(.title2)
@@ -311,7 +338,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading) {
                         Text("存储管理")
                             .font(.subheadline)
-                        Text("查看本地存储使用情况")
+                        Text("查看存储使用情况、清除缓存")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -326,33 +353,6 @@ struct SettingsView: View {
                 .liquidGlass(cornerRadius: 6, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
             }
             .buttonStyle(.plain)
-
-            // 清除缓存
-            Button {
-                clearCache()
-            } label: {
-                HStack {
-                    Image(systemName: "trash")
-                        .font(.title2)
-                        .foregroundColor(.red)
-                        .frame(width: 36, height: 36)
-                        .background(Color.red.opacity(0.1))
-                        .cornerRadius(8)
-
-                    VStack(alignment: .leading) {
-                        Text("清除缓存")
-                            .font(.subheadline)
-                            .foregroundColor(.primary)
-                        Text("清除本地消息缓存")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-                }
-                .padding(12)
-                .liquidGlass(cornerRadius: 6, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
-            }
         }
     }
 
@@ -386,7 +386,7 @@ struct SettingsView: View {
                 .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
 
                 // 更新日志
-                NavigationLink(destination: ChangelogView()) {
+                NavigationLink(value: "changelog") {
                     HStack {
                         Text("更新日志")
                             .font(.subheadline)
@@ -440,14 +440,18 @@ struct SettingsView: View {
     }
 
     private func testLatency() {
-        guard !authStore.serverUrl.isEmpty else { return }
+        let serverUrl = authStore.serverUrl
+        print("[Settings] testLatency - serverUrl: \(serverUrl)")
+        print("[Settings] testLatency - lanUrl: \(authStore.lanUrl)")
+        print("[Settings] testLatency - tunnelUrl: \(authStore.tunnelUrl)")
+        print("[Settings] testLatency - serverMode: \(authStore.serverMode)")
+
+        guard !serverUrl.isEmpty else { return }
         testingLatency = true
         latency = nil
 
         Task {
             do {
-                let serverUrl = authStore.serverUrl
-
                 // 构建 URL，处理 host:port:token 格式
                 var urlString = serverUrl
                 let colonCount = serverUrl.filter { $0 == ":" }.count
@@ -461,6 +465,8 @@ struct SettingsView: View {
                 } else if !serverUrl.hasPrefix("http://") && !serverUrl.hasPrefix("https://") {
                     urlString = "http://\(serverUrl)"
                 }
+
+                print("[Settings] testLatency - final URL: \(urlString)/api/sessions")
 
                 guard let url = URL(string: "\(urlString)/api/sessions") else {
                     await MainActor.run {
@@ -491,24 +497,12 @@ struct SettingsView: View {
                     self.testingLatency = false
                 }
             } catch {
+                print("[Settings] testLatency - error: \(error)")
                 await MainActor.run {
                     self.latency = -1
                     self.testingLatency = false
                 }
             }
-        }
-    }
-
-    private func clearCache() {
-        // 清除本地消息缓存文件
-        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
-        let messagesDir = paths[0].appendingPathComponent("messages", isDirectory: true)
-        try? FileManager.default.removeItem(at: messagesDir)
-        try? FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
-
-        // 清除内存中的消息
-        for key in sessionStore.messages.keys {
-            sessionStore.messages[key] = []
         }
     }
 
@@ -544,10 +538,21 @@ struct UrlEditSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField(placeholder, text: $url)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
+                HStack {
+                    TextField(placeholder, text: $url)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+
+                    if !url.isEmpty {
+                        Button {
+                            url = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
 
                 Text("输入桌面端的地址")
                     .font(.caption)
@@ -638,7 +643,6 @@ struct ThemeSelectionSheet: View {
     SettingsView()
         .environmentObject(AuthStore())
         .environmentObject(AppState())
-        .environmentObject(SessionStore())
 }
 
 // MARK: - 网络模式滑块

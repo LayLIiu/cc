@@ -1,7 +1,6 @@
 // 聊天视图
 
 import SwiftUI
-import UserNotifications
 
 struct ChatView: View {
     let sessionId: String
@@ -106,7 +105,8 @@ struct ChatView: View {
                             .foregroundColor(.primary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
                             .clipShape(Capsule())
                         }
                         .padding(.bottom, 8)
@@ -149,9 +149,6 @@ struct ChatView: View {
 
             // 更新会话的最后修改时间（让会话移动到"今天"分组）
             sessionStore.touchSession(sessionId)
-
-            // 请求通知权限
-            _ = await NotificationService.shared.requestAuthorization()
 
             // 先从服务端拉取最新消息（可能桌面端已产生新消息）
             await fetchLatestMessages()
@@ -204,12 +201,6 @@ struct ChatView: View {
             if let usage = newUsage {
                 contextUsage = usage
             }
-        }
-        .onChange(of: chatStatus) { oldStatus, newStatus in
-            if newStatus == .completed && oldStatus != .completed {
-                sendCompletionNotification()
-            }
-            previousStatus = newStatus
         }
         .onAppear {
             hideTabBar = true
@@ -311,49 +302,27 @@ struct ChatView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.85)) : AnyShapeStyle(.ultraThinMaterial))
+                        .fill(.ultraThinMaterial)
                 )
                 .focused($isInputFocused)
 
             Button {
                 sendMessage()
             } label: {
-                Image(systemName: chatStatus == .idle ? "arrow.up.circle.fill" : "stop.circle.fill")
-                    .font(.title)
-                    .foregroundColor(inputText.isEmpty && chatStatus == .idle ? .secondary : .adaptivePrimary)
+                Text("发送")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(inputText.isEmpty ? .secondary : .white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(inputText.isEmpty ? Color.secondary.opacity(0.2) : Color.adaptivePrimary)
+                    .cornerRadius(16)
             }
-            .disabled(inputText.isEmpty && chatStatus == .idle)
+            .disabled(inputText.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .liquidGlass(cornerRadius: 0, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
-    }
-
-    // MARK: - Actions
-
-    private func updateTaskNotification(_ messages: [Message]) {
-        // 查找任务列表消息
-        guard let taskMessage = messages.last(where: { $0.type == .taskList }),
-              let tasks = taskMessage.tasks else { return }
-
-        Task {
-            await NotificationService.shared.updateTaskListNotification(
-                sessionId: sessionId,
-                sessionTitle: session?.title ?? "任务",
-                tasks: tasks
-            )
-        }
-    }
-
-    private func sendCompletionNotification() {
-        guard let lastAssistantMessage = messages.last(where: { $0.type == .assistant }) else { return }
-
-        Task {
-            await NotificationService.shared.sendCompletionNotification(
-                title: session?.title ?? "对话完成",
-                message: lastAssistantMessage.content
-            )
-        }
+        .background(isLightTheme ? Color.clear : Color(hex: "1A1A1A").opacity(0.8))
     }
 
     // MARK: - 拉取最新消息
@@ -499,30 +468,10 @@ struct ChatView: View {
         case .permissionRequest:
             flushStreamingBuffers()
             chatStatus = .permissionPending
-            if let requestId = msg.requestId {
-                Task {
-                    await NotificationService.shared.sendPermissionNotification(
-                        sessionId: sessionId,
-                        permissionId: requestId,
-                        toolName: msg.toolName ?? "Unknown",
-                        description: msg.description ?? ""
-                    )
-                }
-            }
 
         case .question:
             flushStreamingBuffers()
             chatStatus = .questionPending
-            if let questionId = msg.questionId {
-                Task {
-                    await NotificationService.shared.sendQuestionNotification(
-                        sessionId: sessionId,
-                        questionId: questionId,
-                        question: msg.questionText ?? "",
-                        options: msg.options ?? []
-                    )
-                }
-            }
 
         case .tokenUsage:
             if let percentage = msg.percentage {
@@ -770,7 +719,8 @@ struct MessageBubbleView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.95)) : AnyShapeStyle(.ultraThinMaterial))
+                    .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
                     .clipShape(Capsule())
                 }
             }
@@ -802,7 +752,7 @@ struct MessageBubbleView: View {
         Text(message.content)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+            .background(.ultraThinMaterial)
             .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 
@@ -815,7 +765,7 @@ struct MessageBubbleView: View {
                 MarkdownRenderer(content: message.content)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+                    .background(.ultraThinMaterial)
                     .clipShape(RoundedRectangle(cornerRadius: 18))
             }
         }
@@ -874,7 +824,8 @@ struct MessageBubbleView: View {
                     MarkdownRenderer(content: result)
                 }
                 .padding(12)
-                .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 EmptyView()
@@ -977,7 +928,8 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+        .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -1096,7 +1048,8 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+        .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -1191,7 +1144,8 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+        .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 

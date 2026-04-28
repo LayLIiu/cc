@@ -1,0 +1,4 @@
+# Obfuscation rules file
+# Keep all classes and methods
+-keep class * { *; }
+-keepattributes *

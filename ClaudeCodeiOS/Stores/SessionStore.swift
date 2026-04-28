@@ -152,7 +152,7 @@ class SessionStore: ObservableObject {
             .store(in: &cancellables)
     }
 
-    // 处理全局 WebSocket 消息（只处理非当前会话的状态）
+    // 处理全局 WebSocket 消息（所有会话的消息，包括当前和非当前会话）
     private func handleGlobalWSMessage(sessionId: String, message: WSMessage) {
         print("[SessionStore] 📩 Global WS msg: \(message.type) for session \(sessionId)")
 
@@ -162,17 +162,12 @@ class SessionStore: ObservableObject {
             return
         }
 
-        // 如果是当前打开的会话，跳过（ChatView 自己处理流式内容）
-        if currentSessionId == sessionId {
-            print("[SessionStore] ⏭️ Skipping current session \(sessionId), ChatView handles it")
-            return
-        }
-
         // 确保在主线程更新 UI 相关数据
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
-            // 非当前会话：只更新状态，不处理流式内容
+            let isCurrentSession = self.currentSessionId == sessionId
+
             switch message.type {
             case .sessionTitleUpdated:
                 if let title = message.title { self.updateSessionTitle(sessionId, title) }
@@ -201,11 +196,48 @@ class SessionStore: ObservableObject {
                 // 触发 objectWillChange 让会话列表刷新
                 self.objectWillChange.send()
 
+                // 🔔 非当前会话发送完成通知
+                if !isCurrentSession {
+                    // 非当前会话，发送通知
+                    Task {
+                        let sessionTitle = self.sessions.first { $0.id == sessionId }?.title ?? "对话"
+                        // 获取最后一条助手消息作为通知内容
+                        let lastAssistantMsg = self.messages[sessionId]?.last(where: { $0.type == .assistant })
+                        let content = lastAssistantMsg?.content ?? "工作完成"
+                        await NotificationService.shared.sendCompletionNotification(
+                            title: sessionTitle,
+                            message: content
+                        )
+                    }
+                }
+
             case .permissionRequest:
                 self.sessionStatuses[sessionId] = .permissionPending
+                // 🔔 非当前会话发送权限通知
+                if !isCurrentSession, let requestId = message.requestId {
+                    Task {
+                        await NotificationService.shared.sendPermissionNotification(
+                            sessionId: sessionId,
+                            permissionId: requestId,
+                            toolName: message.toolName ?? "Unknown",
+                            description: message.description ?? ""
+                        )
+                    }
+                }
 
             case .question:
                 self.sessionStatuses[sessionId] = .questionPending
+                // 🔔 非当前会话发送问题通知
+                if !isCurrentSession, let questionId = message.questionId {
+                    Task {
+                        await NotificationService.shared.sendQuestionNotification(
+                            sessionId: sessionId,
+                            questionId: questionId,
+                            question: message.questionText ?? "",
+                            options: message.options ?? []
+                        )
+                    }
+                }
 
             case .tokenUsage:
                 if let percentage = message.percentage {
@@ -213,8 +245,8 @@ class SessionStore: ObservableObject {
                 }
 
             case .userMessageEcho:
-                // 非当前会话收到用户消息 echo，添加到消息列表
-                print("[SessionStore] 📩 user_message_echo for non-current session \(sessionId)")
+                // 收到用户消息 echo，添加到消息列表
+                print("[SessionStore] 📩 user_message_echo for session \(sessionId)")
                 if let contentValue = message.content?.value {
                     var contentString = (contentValue as? String) ?? String(describing: contentValue)
 

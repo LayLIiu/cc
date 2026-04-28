@@ -356,33 +356,74 @@ struct LoginView: View {
 
         // 格式化URL
         var url = serverUrl.trimmingCharacters(in: .whitespaces)
+
+        // 处理 host:port:token 格式，提取 host:port
+        let colonCount = url.filter { $0 == ":" }.count
+        if colonCount >= 2 && !url.hasPrefix("http") {
+            let parts = url.split(separator: ":")
+            if parts.count >= 2 {
+                url = "\(parts[0]):\(parts[1])"
+            }
+        }
+
         if !url.hasPrefix("http://") && !url.hasPrefix("https://") {
             url = "http://" + url
         }
 
+        print("[Login] Manual connecting to: \(url)")
+
         Task {
             do {
-                // 设置 API 服务地址
-                APIService.shared.setBaseUrl(url)
-
-                // 验证连接 - 获取网络信息
-                let networkInfo = try await APIService.shared.getNetworkInfo()
-
-                await MainActor.run {
-                    // 保存 URL
-                    authStore.setLanUrl(url)
-
-                    // 如果有隧道地址，也保存
-                    if let tunnelUrl = networkInfo.tunnelUrl, !tunnelUrl.isEmpty {
-                        authStore.setTunnelUrl(tunnelUrl)
+                // 直接测试服务器连通性
+                guard let testUrl = URL(string: "\(url)/api/sessions") else {
+                    await MainActor.run {
+                        errorMessage = "无效的服务器地址"
+                        isConnecting = false
                     }
+                    return
+                }
 
-                    // 登录成功
-                    let user = User(id: "1", name: "用户", email: nil)
-                    authStore.login(user: user)
-                    isConnecting = false
+                var request = URLRequest(url: testUrl)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 10
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    await MainActor.run {
+                        errorMessage = "无效的响应"
+                        isConnecting = false
+                    }
+                    return
+                }
+
+                print("[Login] Response status: \(httpResponse.statusCode)")
+
+                if (200..<300).contains(httpResponse.statusCode) {
+                    await MainActor.run {
+                        // 设置 API 服务地址
+                        APIService.shared.setBaseUrl(url)
+
+                        // 保存 URL
+                        if url.hasPrefix("https://") {
+                            authStore.setTunnelUrl(url)
+                        } else {
+                            authStore.setLanUrl(url)
+                        }
+
+                        // 登录成功
+                        let user = User(id: "1", name: "用户", email: nil)
+                        authStore.login(user: user)
+                        isConnecting = false
+                    }
+                } else {
+                    await MainActor.run {
+                        errorMessage = "服务器返回错误: HTTP \(httpResponse.statusCode)"
+                        isConnecting = false
+                    }
                 }
             } catch {
+                print("[Login] Connection error: \(error)")
                 await MainActor.run {
                     errorMessage = "连接失败：\(error.localizedDescription)"
                     isConnecting = false

@@ -44,7 +44,7 @@ struct MainTabView: View {
                 case "providers":
                     ProvidersView()
                 case "settings":
-                    SettingsView()
+                    SettingsView(hideTabBar: $hideTabBar, animateTabBar: $animateTabBar)
                 default:
                     SessionsView(hideTabBar: $hideTabBar, animateTabBar: $animateTabBar)
                 }
@@ -78,6 +78,9 @@ struct MainTabView: View {
             }
         }
         .task {
+            // 请求通知权限
+            _ = await NotificationService.shared.requestAuthorization()
+
             // 启动时加载会话列表并订阅所有会话消息
             await sessionStore.fetchSessions()
             let serverUrl = authStore.serverUrl

@@ -135,7 +135,7 @@ extension Color {
 
 // MARK: - 玻璃卡片修饰器
 
-/// iOS 26 原生液态玻璃效果
+/// iOS 26 原生液态玻璃效果（仅深色模式使用）
 @available(iOS 26.0, *)
 struct LiquidGlassModifier: ViewModifier {
     var cornerRadius: CGFloat
@@ -151,7 +151,7 @@ struct LiquidGlassModifier: ViewModifier {
     }
 }
 
-/// 后备视图修饰器 - iOS 26 以下使用
+/// 后备视图修饰器 - iOS 26 以下或浅色模式使用
 struct FallbackGlassModifier: ViewModifier {
     var cornerRadius: CGFloat
     var isDark: Bool
@@ -175,17 +175,34 @@ struct FallbackGlassModifier: ViewModifier {
                         .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
                 )
         } else {
-            // 浅色模式：磨砂玻璃效果
+            // 浅色模式：带折射的磨砂玻璃效果
             content
                 .background(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(.ultraThinMaterial)
+                    ZStack {
+                        // 底层：轻微模糊的白色
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .fill(Color.white.opacity(0.7))
+                        // 中层：材质模糊
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .fill(.ultraThinMaterial)
+                        // 顶层：高光边框（模拟折射）
+                        RoundedRectangle(cornerRadius: cornerRadius)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.8),
+                                        Color.white.opacity(0.2),
+                                        Color.white.opacity(0.1)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    }
                 )
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .stroke(Color.gray.opacity(0.2), lineWidth: 0.5)
-                )
+                .shadow(color: Color.black.opacity(0.08), radius: 4, x: 0, y: 2)
         }
     }
 }
@@ -194,12 +211,32 @@ struct FallbackGlassModifier: ViewModifier {
 
 extension View {
     /// 应用玻璃效果卡片样式（用于小的 UI 元素）
+    /// 浅色模式统一使用白色卡片效果，深色模式使用液态玻璃
     @ViewBuilder
     func liquidGlass(cornerRadius: CGFloat = 16, interactive: Bool = false, isDark: Bool = false) -> some View {
+        if isDark {
+            // 深色模式：iOS 26 用原生液态玻璃，旧版本用后备效果
+            if #available(iOS 26.0, *) {
+                modifier(LiquidGlassModifier(cornerRadius: cornerRadius))
+            } else {
+                modifier(FallbackGlassModifier(cornerRadius: cornerRadius, isDark: true))
+            }
+        } else {
+            // 浅色模式：统一使用白色卡片效果，避免灰色底
+            modifier(FallbackGlassModifier(cornerRadius: cornerRadius, isDark: false))
+        }
+    }
+
+    /// Tab 栏专用玻璃效果 - 浅色和深色都使用液态玻璃
+    @ViewBuilder
+    func liquidGlassForTab(cornerRadius: CGFloat = 16) -> some View {
         if #available(iOS 26.0, *) {
             modifier(LiquidGlassModifier(cornerRadius: cornerRadius))
         } else {
-            modifier(FallbackGlassModifier(cornerRadius: cornerRadius, isDark: isDark))
+            // 旧版本：使用材质效果
+            self
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
 
@@ -216,7 +253,7 @@ extension View {
         self.background(
             isDark
                 ? Color(hex: "0D0D0D")
-                : Color(hex: "E5E5EA")
+                : Color.white
         )
     }
 
@@ -284,11 +321,7 @@ struct LiquidGlassTabBar: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .contentShape(Rectangle())  // 整行拦截点击，防止穿透到下面内容
-        .liquidGlass(
-            cornerRadius: 28,
-            interactive: true,
-            isDark: appState.themeMode == .dark || appState.themeMode == .glass
-        )
+        .liquidGlassForTab(cornerRadius: 28)
         .padding(.horizontal, 16)
     }
 }
