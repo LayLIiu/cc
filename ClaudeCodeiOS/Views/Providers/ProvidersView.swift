@@ -11,6 +11,11 @@ struct ProvidersView: View {
     @State private var selectedPreset: String?
     @State private var editingProvider: Provider?
 
+    // 是否是浅色主题
+    private var isLightTheme: Bool {
+        appState.themeMode == .light
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
@@ -251,6 +256,11 @@ struct ProviderCard: View {
 
     @EnvironmentObject var appState: AppState
 
+    // 是否是浅色主题
+    private var isLightTheme: Bool {
+        appState.themeMode == .light
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             Button {
@@ -318,7 +328,8 @@ struct ProviderCard: View {
             }
         }
         .padding(12)
-        .liquidGlass(cornerRadius: 6, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+        .cornerRadius(12)
     }
 }
 

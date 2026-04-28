@@ -31,6 +31,8 @@ struct MainTabView: View {
     @State private var hideTabBar: Bool = false
     @State private var animateTabBar: Bool = false
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var sessionStore: SessionStore
+    @EnvironmentObject var authStore: AuthStore
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -73,6 +75,27 @@ struct MainTabView: View {
             // 当有待导航会话时，切换到会话标签
             if newValue != nil && selectedTab != "sessions" {
                 selectedTab = "sessions"
+            }
+        }
+        .task {
+            // 启动时加载会话列表并订阅所有会话消息
+            await sessionStore.fetchSessions()
+            let serverUrl = authStore.serverUrl
+            if !serverUrl.isEmpty {
+                sessionStore.subscribeToAllSessions(serverUrl: serverUrl)
+            }
+        }
+        .onChange(of: sessionStore.sessions.count) { _, _ in
+            // 会话列表变化时更新订阅
+            let serverUrl = authStore.serverUrl
+            if !serverUrl.isEmpty {
+                sessionStore.updateGlobalSubscription(serverUrl: serverUrl)
+            }
+        }
+        .onChange(of: authStore.serverUrl) { _, newUrl in
+            // 服务器地址变化时重新订阅
+            if !newUrl.isEmpty {
+                sessionStore.subscribeToAllSessions(serverUrl: newUrl)
             }
         }
     }

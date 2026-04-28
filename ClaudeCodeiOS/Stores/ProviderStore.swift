@@ -52,7 +52,10 @@ class ProviderStore: ObservableObject {
             self.activeProviderId = response.activeId
             saveProviders()
         } catch {
-            self.error = error.localizedDescription
+            // 网络错误时不显示弹窗，静默失败
+            // 可能是 URL 格式问题或网络不可用
+            print("[ProviderStore] Failed to load providers: \(error.localizedDescription)")
+            // 保留本地缓存的数据
         }
 
         isLoading = false

@@ -26,6 +26,8 @@ class SessionStore: ObservableObject {
     // WebSocket 服务
     var webSocketService = WebSocketService.shared
     private var cancellables = Set<AnyCancellable>()
+    private var webSocketTaskSessionId: String?
+    private var globalWSSubscribed = false
 
     // 本地存储目录
     private let messagesDirectory: URL = {
@@ -82,36 +84,196 @@ class SessionStore: ObservableObject {
     }
 
     private func parseTimestamp(_ timestamp: String) -> Date {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: timestamp) ?? Date.distantPast
+        let formatters: [ISO8601DateFormatter] = {
+            // 尝试多种格式
+            let f1 = ISO8601DateFormatter()
+            f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+            let f2 = ISO8601DateFormatter()
+            f2.formatOptions = [.withInternetDateTime]
+
+            let f3 = ISO8601DateFormatter()
+            f3.formatOptions = [.withFullDate, .withFullTime, .withFractionalSeconds]
+
+            let f4 = ISO8601DateFormatter()
+            f4.formatOptions = [.withFullDate, .withFullTime]
+
+            return [f1, f2, f3, f4]
+        }()
+
+        for formatter in formatters {
+            if let date = formatter.date(from: timestamp) {
+                return date
+            }
+        }
+
+        // 最后尝试用 DateFormatter
+        let fallbackFormatter = DateFormatter()
+        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        if let date = fallbackFormatter.date(from: timestamp) {
+            return date
+        }
+
+        fallbackFormatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"
+        if let date = fallbackFormatter.date(from: timestamp) {
+            return date
+        }
+
+        return Date.distantPast
     }
 
     init() {
         // 加载保存的会话数据
         loadSavedData()
 
-        // WebSocket 消息由 ChatView 直接监听处理，这里不再重复处理
-        // 但仍保留连接，以便非聊天页面也能收到状态更新
+        // 全局 WebSocket 消息处理 - 始终接收所有会话的消息
+        webSocketService.$globalLastMessage
+            .receive(on: DispatchQueue.main)
+            .compactMap { $0 }
+            .sink { [weak self] tuple in
+                guard let self = self else { return }
+                let (sessionId, message) = tuple
+                self.handleGlobalWSMessage(sessionId: sessionId, message: message)
+            }
+            .store(in: &cancellables)
+
+        // 保留旧的单会话 WebSocket 用于兼容
         webSocketService.$lastMessage
             .receive(on: DispatchQueue.main)
             .compactMap { $0 }
-            .filter { $0.type == .sessionTitleUpdated || $0.type == .status }
             .sink { [weak self] message in
                 guard let self = self else { return }
                 let targetSessionId = message.sessionId ?? self.currentSessionId
                 guard let sessionId = targetSessionId else { return }
-
-                switch message.type {
-                case .sessionTitleUpdated:
-                    if let title = message.title { self.updateSessionTitle(sessionId, title) }
-                case .status:
-                    if let state = message.state { self.updateSessionStatusFromState(sessionId, state) }
-                default:
-                    break
-                }
+                // 如果全局 WebSocket 已订阅，跳过旧连接的消息
+                if self.globalWSSubscribed { return }
+                self.handleWebSocketMessage(message)
             }
             .store(in: &cancellables)
+    }
+
+    // 处理全局 WebSocket 消息（只处理非当前会话的状态）
+    private func handleGlobalWSMessage(sessionId: String, message: WSMessage) {
+        print("[SessionStore] 📩 Global WS msg: \(message.type) for session \(sessionId)")
+
+        // 忽略 connected 消息
+        if message.type == .connected {
+            print("[SessionStore] 🔗 WebSocket connected for \(sessionId)")
+            return
+        }
+
+        // 如果是当前打开的会话，跳过（ChatView 自己处理流式内容）
+        if currentSessionId == sessionId {
+            print("[SessionStore] ⏭️ Skipping current session \(sessionId), ChatView handles it")
+            return
+        }
+
+        // 确保在主线程更新 UI 相关数据
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            // 非当前会话：只更新状态，不处理流式内容
+            switch message.type {
+            case .sessionTitleUpdated:
+                if let title = message.title { self.updateSessionTitle(sessionId, title) }
+
+            case .status:
+                if let state = message.state { self.updateSessionStatusFromState(sessionId, state) }
+
+            case .contentStart, .contentDelta, .thinking:
+                // 流式消息表明会话正在工作，更新状态
+                let currentStatus = self.sessionStatuses[sessionId]
+                if message.type == .thinking {
+                    self.sessionStatuses[sessionId] = .thinking
+                } else if currentStatus != .streaming && currentStatus != .thinking {
+                    self.sessionStatuses[sessionId] = .streaming
+                }
+
+            case .toolUseComplete:
+                self.sessionStatuses[sessionId] = .toolExecuting
+
+            case .toolResult:
+                break // 非当前会话不关心工具结果
+
+            case .messageComplete:
+                print("[SessionStore] ✅ messageComplete for \(sessionId)")
+                self.sessionStatuses[sessionId] = .completed
+                // 触发 objectWillChange 让会话列表刷新
+                self.objectWillChange.send()
+
+            case .permissionRequest:
+                self.sessionStatuses[sessionId] = .permissionPending
+
+            case .question:
+                self.sessionStatuses[sessionId] = .questionPending
+
+            case .tokenUsage:
+                if let percentage = message.percentage {
+                    self.contextUsages[sessionId] = Int(percentage * 100)
+                }
+
+            case .userMessageEcho:
+                // 非当前会话收到用户消息 echo，添加到消息列表
+                print("[SessionStore] 📩 user_message_echo for non-current session \(sessionId)")
+                if let contentValue = message.content?.value {
+                    var contentString = (contentValue as? String) ?? String(describing: contentValue)
+
+                    // 过滤掉 tool_result 类型的 JSON 内容
+                    contentString = filterToolResultContent(contentString)
+                    if contentString.isEmpty { return }
+
+                    // 检查是否已存在相同内容的用户消息（避免重复）
+                    let existingUserMessages = self.messages[sessionId]?.filter {
+                        $0.type == .user && $0.content == contentString
+                    } ?? []
+
+                    if existingUserMessages.isEmpty {
+                        let userMsg = Message(
+                            id: message.id ?? "user-\(UUID().uuidString)",
+                            type: .user,
+                            content: contentString,
+                            timestamp: message.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                        )
+                        self.addMessage(sessionId, userMsg)
+                        print("[SessionStore] ✅ Added user message to session \(sessionId)")
+
+                        // 通知 UI 刷新
+                        self.objectWillChange.send()
+                    } else {
+                        print("[SessionStore] ⏭️ Skipping duplicate user message for session \(sessionId)")
+                    }
+                }
+
+            case .error:
+                if let text = message.text {
+                    self.error = text
+                }
+
+            default:
+                break
+            }
+        }
+    }
+
+    // 准备接收流式文本 - 清空之前的助手消息
+    private func prepareForStreaming(_ sessionId: String) {
+        var sessionMessages = messages[sessionId] ?? []
+        // 移除最后一条空的助手消息（如果存在）
+        if let lastIndex = sessionMessages.indices.last,
+           sessionMessages[lastIndex].type == .assistant,
+           sessionMessages[lastIndex].content.isEmpty {
+            sessionMessages.removeLast()
+        }
+        // 创建新的空助手消息占位
+        let newMessage = Message(
+            id: "assistant-streaming-\(UUID().uuidString)",
+            type: .assistant,
+            content: "",
+            timestamp: ISO8601DateFormatter().string(from: Date())
+        )
+        sessionMessages.append(newMessage)
+        messages[sessionId] = sessionMessages
+        print("[SessionStore] 📝 Prepared for streaming, message count: \(sessionMessages.count)")
     }
 
     private func loadSavedData() {
@@ -253,16 +415,20 @@ class SessionStore: ObservableObject {
         case .userMessageEcho:
             // 用户消息回显 - 添加到对应会话
             if let contentValue = wsMessage.content?.value {
-                let contentString: String
+                var contentString: String
                 if let str = contentValue as? String {
                     contentString = str
                 } else {
                     contentString = String(describing: contentValue)
                 }
+                // 过滤掉 tool_result 类型的 JSON 内容
+                contentString = filterToolResultContent(contentString)
+                if contentString.isEmpty { return }
+
                 print("[SessionStore] 👤 User message echo: \(contentString.prefix(50))")
                 let userMessage = Message(
                     id: wsMessage.id ?? "user-\(UUID().uuidString)",
-                    type: .userText,
+                    type: .user,
                     content: contentString,
                     timestamp: wsMessage.timestamp ?? ISO8601DateFormatter().string(from: Date())
                 )
@@ -274,36 +440,50 @@ class SessionStore: ObservableObject {
 
     private func appendStreamingText(_ sessionId: String, _ text: String) {
         var sessionMessages = messages[sessionId] ?? []
+        print("[SessionStore] 📝 appendStreamingText for \(sessionId), text length: \(text.count), messages count: \(sessionMessages.count)")
 
         // 查找最后一条助手消息
         if let lastIndex = sessionMessages.indices.last,
-           sessionMessages[lastIndex].type == .assistantText {
+           sessionMessages[lastIndex].type == .assistant {
 
             let msg = sessionMessages[lastIndex]
+            let newContent = msg.content + text
             let updatedMsg = Message(
                 id: msg.id,
                 type: msg.type,
-                content: msg.content + text,
+                content: newContent,
                 timestamp: msg.timestamp,
                 toolName: msg.toolName,
                 toolInput: msg.toolInput,
                 toolResult: msg.toolResult,
-                toolStatus: msg.toolStatus
+                toolStatus: msg.toolStatus,
+                isStreaming: true
             )
             sessionMessages[lastIndex] = updatedMsg
+
+            // 强制触发更新
+            messages[sessionId] = nil
+            messages[sessionId] = sessionMessages
+            print("[SessionStore] 📝 Updated existing message, content length: \(newContent.count)")
         } else {
-            // 创建新的助手消息
+            // 创建新的助手消息 - 更新会话时间
             let newMessage = Message(
                 id: "assistant-\(UUID().uuidString)",
-                type: .assistantText,
+                type: .assistant,
                 content: text,
-                timestamp: ISO8601DateFormatter().string(from: Date())
+                timestamp: ISO8601DateFormatter().string(from: Date()),
+                isStreaming: true
             )
             sessionMessages.append(newMessage)
-        }
 
-        // 强制触发 UI 更新
-        messages[sessionId] = sessionMessages
+            // 强制触发更新
+            messages[sessionId] = nil
+            messages[sessionId] = sessionMessages
+
+            // 更新会话的最后修改时间
+            touchSession(sessionId)
+            print("[SessionStore] 📝 Created new message, total count: \(sessionMessages.count)")
+        }
     }
 
     private func updateThinkingContent(_ sessionId: String, _ text: String) {
@@ -410,7 +590,7 @@ class SessionStore: ObservableObject {
     private func addPermissionRequestMessage(_ sessionId: String, _ requestId: String, _ toolName: String, _ description: String?) {
         let message = Message(
             id: "permission-\(requestId)",
-            type: .userText,
+            type: .user,
             content: description ?? "权限请求: \(toolName)",
             timestamp: ISO8601DateFormatter().string(from: Date()),
             toolName: toolName,
@@ -424,7 +604,7 @@ class SessionStore: ObservableObject {
     private func addQuestionMessage(_ sessionId: String, _ questionId: String, _ questionText: String, _ options: [String]) {
         let message = Message(
             id: "question-\(questionId)",
-            type: .userText,
+            type: .user,
             content: questionText,
             timestamp: ISO8601DateFormatter().string(from: Date()),
             questionId: questionId,
@@ -443,7 +623,30 @@ class SessionStore: ObservableObject {
 
         do {
             let fetched = try await APIService.shared.getSessions()
-            sessions = fetched
+
+            // 保留本地更新的 modifiedAt（避免被服务器旧数据覆盖）
+            let localModifiedAt = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0.modifiedAt) })
+
+            sessions = fetched.map { serverSession in
+                // 如果本地有更新的 modifiedAt，使用本地的
+                if let localTime = localModifiedAt[serverSession.id] {
+                    let localDate = parseTimestamp(localTime)
+                    let serverDate = parseTimestamp(serverSession.modifiedAt)
+                    if localDate > serverDate {
+                        return Session(
+                            id: serverSession.id,
+                            title: serverSession.title,
+                            projectPath: serverSession.projectPath,
+                            workDir: serverSession.workDir,
+                            workDirExists: serverSession.workDirExists,
+                            createdAt: serverSession.createdAt,
+                            modifiedAt: localTime,
+                            messageCount: serverSession.messageCount
+                        )
+                    }
+                }
+                return serverSession
+            }
             saveSessions()
             isLoading = false
         } catch {
@@ -539,14 +742,23 @@ class SessionStore: ObservableObject {
                 print("[SessionStore] 🔄 Fetched \(fetched.count) messages from server")
 
                 await MainActor.run {
-                    // 合并消息（去重）
-                    var existingIds = Set(self.messages[sessionId]?.map { $0.id } ?? [])
+                    // 合并消息（按 ID 和内容双重去重）
+                    var existingIds = Set<String>()
+                    var existingContents = Set<String>()
                     var mergedMessages = self.messages[sessionId] ?? []
 
+                    for msg in mergedMessages {
+                        existingIds.insert(msg.id)
+                        existingContents.insert("\(msg.type.rawValue)-\(msg.content)")
+                    }
+
                     for msg in fetched {
-                        if !existingIds.contains(msg.id) {
+                        let contentKey = "\(msg.type.rawValue)-\(msg.content)"
+                        // 按 ID 和内容双重检查去重
+                        if !existingIds.contains(msg.id) && !existingContents.contains(contentKey) {
                             mergedMessages.append(msg)
                             existingIds.insert(msg.id)
+                            existingContents.insert(contentKey)
                         }
                     }
 
@@ -573,8 +785,42 @@ class SessionStore: ObservableObject {
 
     func addMessage(_ sessionId: String, _ message: Message) {
         var sessionMessages = messages[sessionId] ?? []
-        sessionMessages.append(message)
-        messages[sessionId] = sessionMessages
+
+        // 去重：检查是否已存在相同 ID 或相同类型+内容的消息
+        let exists = sessionMessages.contains { existing in
+            existing.id == message.id ||
+            (existing.type == message.type &&
+             existing.content == message.content &&
+             !message.content.isEmpty)
+        }
+
+        if !exists {
+            sessionMessages.append(message)
+            messages[sessionId] = sessionMessages
+            // 更新会话的最后修改时间
+            touchSession(sessionId)
+        }
+    }
+
+    /// 更新会话的最后修改时间（用于会话列表排序）
+    func touchSession(_ sessionId: String) {
+        if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
+            let old = sessions[index]
+            let now = ISO8601DateFormatter().string(from: Date())
+            sessions[index] = Session(
+                id: old.id,
+                title: old.title,
+                projectPath: old.projectPath,
+                workDir: old.workDir,
+                workDirExists: old.workDirExists,
+                createdAt: old.createdAt,
+                modifiedAt: now,
+                messageCount: old.messageCount
+            )
+            saveSessions()
+            // 触发 UI 刷新
+            objectWillChange.send()
+        }
     }
 
     func updateToolResult(_ sessionId: String, _ toolUseId: String, _ result: String, _ status: ToolStatus) {
@@ -632,34 +878,94 @@ class SessionStore: ObservableObject {
 
     // MARK: - WebSocket 连接
 
+    /// 订阅所有会话的消息（全局监听）
+    func subscribeToAllSessions(serverUrl: String) {
+        guard !serverUrl.isEmpty else { return }
+        let sessionIds = sessions.map { $0.id }
+        webSocketService.subscribeToAllSessions(serverUrl: serverUrl, sessionIds: sessionIds)
+        globalWSSubscribed = true
+        print("[SessionStore] ✅ Subscribed to \(sessionIds.count) sessions globally")
+    }
+
+    /// 更新订阅列表（当会话列表变化时调用）
+    func updateGlobalSubscription(serverUrl: String) {
+        guard globalWSSubscribed else { return }
+        let sessionIds = sessions.map { $0.id }
+        webSocketService.subscribeToAllSessions(serverUrl: serverUrl, sessionIds: sessionIds)
+    }
+
     func connectWebSocket(serverUrl: String, sessionId: String) {
         // 确保 currentSessionId 在连接前设置，用于消息路由
         currentSessionId = sessionId
+        // 如果已连接同一个会话，不需要重连
+        if webSocketService.isConnected && webSocketTaskSessionId == sessionId {
+            return
+        }
+        // 先断开旧连接再重连
+        if webSocketService.isConnected {
+            webSocketService.disconnect()
+        }
+        webSocketTaskSessionId = sessionId
         webSocketService.connect(serverUrl: serverUrl, sessionId: sessionId)
     }
 
     func disconnectWebSocket() {
         webSocketService.disconnect()
+        webSocketTaskSessionId = nil
     }
 
     func sendMessage(_ content: String) {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ sendMessage: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 📤 sendMessage: sessionId=\(sessionId), globalWSSubscribed=\(globalWSSubscribed)")
+        print("[SessionStore] 📤 globalConnections: \(webSocketService.globalConnections.keys)")
         let message = OutgoingMessage.userMessage(content)
-        webSocketService.send(message)
+
+        // 优先使用全局 WebSocket
+        if globalWSSubscribed {
+            let sent = webSocketService.sendGlobal(sessionId: sessionId, message: message)
+            print("[SessionStore] 📤 sendGlobal result: \(sent)")
+            if !sent {
+                // 如果全局发送失败，尝试回退到旧连接
+                print("[SessionStore] 📤 Falling back to legacy WebSocket")
+                webSocketService.send(message)
+            }
+        } else {
+            webSocketService.send(message)
+            print("[SessionStore] 📤 sent via legacy WebSocket")
+        }
     }
 
     func sendPermissionResponse(requestId: String, allowed: Bool, always: Bool = false) {
+        guard let sessionId = currentSessionId else { return }
         let message = OutgoingMessage.permissionResponse(requestId: requestId, allowed: allowed, always: always)
-        webSocketService.send(message)
+        if globalWSSubscribed {
+            _ = webSocketService.sendGlobal(sessionId: sessionId, message: message)
+        } else {
+            webSocketService.send(message)
+        }
     }
 
     func sendQuestionResponse(questionId: String, answer: String) {
+        guard let sessionId = currentSessionId else { return }
         let message = OutgoingMessage.questionResponse(questionId: questionId, answer: answer)
-        webSocketService.send(message)
+        if globalWSSubscribed {
+            _ = webSocketService.sendGlobal(sessionId: sessionId, message: message)
+        } else {
+            webSocketService.send(message)
+        }
     }
 
     func stopGeneration() {
+        guard let sessionId = currentSessionId else { return }
         let message = OutgoingMessage.stop()
-        webSocketService.send(message)
+        if globalWSSubscribed {
+            _ = webSocketService.sendGlobal(sessionId: sessionId, message: message)
+        } else {
+            webSocketService.send(message)
+        }
     }
 
     // MARK: - 导入会话
@@ -701,5 +1007,51 @@ class SessionStore: ObservableObject {
             return (0, "导入失败，请检查网络连接")
         }
         return (importedCount, nil)
+    }
+
+    // MARK: - 辅助方法：过滤 tool_result 内容
+
+    /// 过滤掉 tool_result 类型的 JSON 内容
+    /// 如果内容是 tool_result 数组，返回空字符串
+    /// 如果内容混合了 tool_result 和其他类型，只保留非 tool_result 的文本
+    private func filterToolResultContent(_ content: String) -> String {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // 检查是否是 JSON 数组
+        guard trimmed.hasPrefix("[") else {
+            return content
+        }
+
+        guard let data = trimmed.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return content
+        }
+
+        // 检查是否包含 tool_result 类型
+        let hasToolResult = json.contains { item in
+            (item["type"] as? String) == "tool_result"
+        }
+
+        if !hasToolResult {
+            return content
+        }
+
+        // 检查是否所有元素都是 tool_result
+        let allAreToolResults = json.allSatisfy { item in
+            (item["type"] as? String) == "tool_result"
+        }
+
+        if allAreToolResults {
+            // 全部是 tool_result，不显示
+            return ""
+        }
+
+        // 提取非 tool_result 的文本内容
+        let texts = json.compactMap { item -> String? in
+            guard (item["type"] as? String) == "text" else { return nil }
+            return item["text"] as? String
+        }
+
+        return texts.isEmpty ? "" : texts.joined(separator: "\n")
     }
 }

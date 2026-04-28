@@ -3,6 +3,10 @@
 import SwiftUI
 
 struct ChangelogView: View {
+    @EnvironmentObject var appState: AppState
+
+    private var isDark: Bool { appState.themeMode == .dark || appState.themeMode == .glass }
+
     private let versions: [VersionEntry] = [
         VersionEntry(
             version: "1.0.0",
@@ -28,7 +32,7 @@ struct ChangelogView: View {
     var body: some View {
         ZStack {
             Color.clear
-                .liquidGlassBackground(isDark: false)
+                .liquidGlassBackground(isDark: isDark)
                 .ignoresSafeArea()
 
             ScrollView {
@@ -43,6 +47,7 @@ struct ChangelogView: View {
         }
         .navigationTitle("更新日志")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
     }
 
     private func versionCard(_ entry: VersionEntry) -> some View {

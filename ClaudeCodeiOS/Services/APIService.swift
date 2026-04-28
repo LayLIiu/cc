@@ -10,7 +10,43 @@ class APIService {
     private init() {}
 
     func setBaseUrl(_ url: String) {
-        self.baseUrl = url.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var processedUrl = url.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        var isSecure = false
+
+        // 1. 先移除协议前缀并记录是否使用 HTTPS
+        if processedUrl.hasPrefix("https://") {
+            isSecure = true
+            processedUrl = String(processedUrl.dropFirst(8))
+        } else if processedUrl.hasPrefix("http://") {
+            processedUrl = String(processedUrl.dropFirst(7))
+        }
+
+        // 2. 处理特殊格式：host:port:token
+        // 格式可能是：192.168.3.34:50427:UVU248 或 xxx.tunnel.com:443:token
+        let colonCount = processedUrl.filter { $0 == ":" }.count
+        if colonCount >= 2 {
+            let parts = processedUrl.split(separator: ":")
+            if parts.count >= 2 {
+                let host = String(parts[0])
+                let port = String(parts[1])
+                processedUrl = "\(host):\(port)"
+                print("[APIService] 🔧 Parsed host:port:token format, extracted: \(processedUrl)")
+            }
+        }
+
+        // 3. 根据 tunnel 或安全连接决定协议
+        let isTunnel = processedUrl.contains(".tunnel.") ||
+                       processedUrl.contains("trycloudflare") ||
+                       processedUrl.contains("loca.lt")
+
+        if isSecure || isTunnel {
+            processedUrl = "https://" + processedUrl
+        } else {
+            processedUrl = "http://" + processedUrl
+        }
+
+        self.baseUrl = processedUrl
+        print("[APIService] 🔧 Final baseUrl: \(self.baseUrl)")
     }
 
     // MARK: - 会话 API
@@ -173,7 +209,7 @@ class APIService {
                 if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     result.append(Message(
                         id: msgId,
-                        type: .userText,
+                        type: .user,
                         content: text.trimmingCharacters(in: .whitespacesAndNewlines),
                         timestamp: timestamp
                     ))
@@ -193,7 +229,7 @@ class APIService {
                                 if !text.isEmpty {
                                     result.append(Message(
                                         id: "\(msgId)-text-\(blockIdx)",
-                                        type: .assistantText,
+                                        type: .assistant,
                                         content: text,
                                         timestamp: timestamp
                                     ))
@@ -223,10 +259,11 @@ class APIService {
                         }
                     } else if let text = content.value as? String {
                         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
+                        // 隐藏 JSON 格式的工具调用链消息
+                        if !trimmed.isEmpty && !(trimmed.hasPrefix("[{") && (trimmed.contains("\"tool_use_id\"") || trimmed.contains("\"tool_result\""))) {
                             result.append(Message(
                                 id: msgId,
-                                type: .assistantText,
+                                type: .assistant,
                                 content: trimmed,
                                 timestamp: timestamp
                             ))
@@ -247,6 +284,12 @@ class APIService {
                     } else {
                         resultContent = String(describing: content.value)
                     }
+                }
+
+                // 隐藏 JSON 格式的工具调用链消息
+                let trimmed = resultContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.hasPrefix("[{") && (trimmed.contains("\"tool_use_id\"") || trimmed.contains("\"tool_result\"")) {
+                    continue // 跳过，不添加到结果中
                 }
 
                 let isError = msg.isError ?? false

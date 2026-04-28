@@ -162,24 +162,31 @@ struct FallbackGlassModifier: ViewModifier {
     }
 
     func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(isDark
-                        ? Color(hex: "2C2C2E")
-                        : Color(hex: "D1D1D6")
-                    )
-            )
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(
-                        isDark
-                            ? Color.white.opacity(0.15)
-                            : Color.gray.opacity(0.25),
-                        lineWidth: 0.5
-                    )
-            )
+        if isDark {
+            // 深色模式：保持原玻璃效果
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(Color(hex: "2C2C2E"))
+                )
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                )
+        } else {
+            // 浅色模式：磨砂玻璃效果
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(.ultraThinMaterial)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(Color.gray.opacity(0.2), lineWidth: 0.5)
+                )
+        }
     }
 }
 
@@ -211,6 +218,24 @@ extension View {
                 ? Color(hex: "0D0D0D")
                 : Color(hex: "E5E5EA")
         )
+    }
+
+    /// 主题自适应背景 - 浅色主题用高斯模糊，其他主题用玻璃
+    @ViewBuilder
+    func themedBackground(isLightTheme: Bool, cornerRadius: CGFloat = 18) -> some View {
+        if isLightTheme {
+            // 浅色主题：高斯模糊效果
+            self.background(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(.ultraThinMaterial)
+                    .blur(radius: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        } else {
+            // 其他主题：保持原玻璃效果
+            self.background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+        }
     }
 }
 

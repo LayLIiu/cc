@@ -28,14 +28,11 @@ struct ThinkingBlock: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    // 思考动画指示器
-                    if isStreaming {
-                        ThinkingDots()
-                    } else {
-                        Image(systemName: "brain")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
+                    // 戴安娜 Logo 动画
+                    ClaudeLogoWidget(
+                        size: 16,
+                        mode: isStreaming ? .thinking : .idle
+                    )
 
                     Text("thinking")
                         .font(.system(size: 11, weight: .medium))
@@ -95,49 +92,17 @@ struct ThinkingBlock: View {
     }
 }
 
-// MARK: - 思考动画（三点脉冲）
-
-struct ThinkingDots: View {
-    @State private var activeDot = 0
-    private let timer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        HStack(spacing: 3) {
-            ForEach(0..<3, id: \.self) { index in
-                Circle()
-                    .fill(Color.secondary)
-                    .frame(width: 5, height: 5)
-                    .opacity(activeDot == index ? 1.0 : 0.3)
-                    .animation(.easeInOut(duration: 0.2), value: activeDot)
-            }
-        }
-        .onReceive(timer) { _ in
-            activeDot = (activeDot + 1) % 3
-        }
-    }
-}
-
 // MARK: - 流式指示器
 
 struct StreamingIndicator: View {
     let text: String
-    @State private var activeDot = 0
-    private let timer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        HStack(spacing: 6) {
-            HStack(spacing: 3) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(Color.adaptivePrimary)
-                        .frame(width: 6, height: 6)
-                        .opacity(activeDot == index ? 1.0 : 0.3)
-                        .animation(.easeInOut(duration: 0.2), value: activeDot)
-                }
-            }
-            .onReceive(timer) { _ in
-                activeDot = (activeDot + 1) % 3
-            }
+        HStack(spacing: 8) {
+            ClaudeLogoWidget(
+                size: 20,
+                mode: .thinking
+            )
 
             if !text.isEmpty {
                 Text(text)
@@ -145,10 +110,65 @@ struct StreamingIndicator: View {
                     .foregroundColor(.secondary)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .background(Color.secondary.opacity(0.08))
         .clipShape(Capsule())
+    }
+}
+
+// MARK: - 状态指示器（用于聊天状态栏）
+
+struct StatusIndicator: View {
+    let status: SessionStatus
+    var size: CGFloat = 10
+
+    @State private var isBreathing = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: size, height: size)
+            .scaleEffect(isBreathing ? 1.2 : 0.8)
+            .opacity(isBreathing ? 1.0 : 0.5)
+            .animation(
+                isAnimating
+                    ? .easeInOut(duration: 0.8).repeatForever(autoreverses: true)
+                    : .default,
+                value: isBreathing
+            )
+            .onAppear {
+                if isAnimating {
+                    isBreathing = true
+                }
+            }
+            .onChange(of: status) { _, newStatus in
+                isBreathing = isAnimating
+            }
+    }
+
+    private var isAnimating: Bool {
+        switch status {
+        case .idle, .completed:
+            return false
+        case .thinking, .streaming, .toolExecuting, .permissionPending, .questionPending:
+            return true
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .idle, .completed:
+            return .gray
+        case .thinking:
+            return .orange
+        case .streaming:
+            return .green
+        case .toolExecuting:
+            return .blue
+        case .permissionPending, .questionPending:
+            return .yellow
+        }
     }
 }
 
@@ -164,6 +184,13 @@ struct StreamingIndicator: View {
                 isStreaming: true
             )
             StreamingIndicator(text: "正在生成回答")
+
+            HStack(spacing: 20) {
+                StatusIndicator(status: .idle, size: 32)
+                StatusIndicator(status: .thinking, size: 32)
+                StatusIndicator(status: .streaming, size: 32)
+                StatusIndicator(status: .permissionPending, size: 32)
+            }
         }
         .padding()
     }

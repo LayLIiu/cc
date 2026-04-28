@@ -11,12 +11,20 @@ struct SettingsView: View {
     @State private var showTunnelModal = false
     @State private var showThemeModal = false
     @State private var showLogoutConfirm = false
+    @State private var navigateToImport = false
+    @State private var navigateToChangelog = false
+    @State private var navigateToStorage = false
     @State private var tempUrl = ""
     @State private var testingLatency = false
     @State private var latency: Int?
 
     private let appVersion = "1.0.0"
     private let buildTime = "2026-04-26"
+
+    // 是否是浅色主题
+    private var isLightTheme: Bool {
+        appState.themeMode == .light
+    }
 
     var body: some View {
         NavigationStack {
@@ -120,7 +128,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("连接")
 
-            VStack(spacing: 8) {
+            VStack(spacing: 12) {
                 // 网络模式切换
                 HStack {
                     Text("当前网络")
@@ -134,8 +142,8 @@ struct SettingsView: View {
                         tunnelEnabled: !authStore.tunnelUrl.isEmpty
                     )
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+
+                Divider()
 
                 // 局域网地址
                 Button {
@@ -156,8 +164,8 @@ struct SettingsView: View {
                             .foregroundColor(.adaptivePrimary)
                     }
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+
+                Divider()
 
                 // 公网地址
                 Button {
@@ -178,8 +186,8 @@ struct SettingsView: View {
                             .foregroundColor(.adaptivePrimary)
                     }
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+
+                Divider()
 
                 // 当前地址
                 HStack {
@@ -190,8 +198,8 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+
+                Divider()
 
                 // 连接速度
                 Button {
@@ -217,10 +225,11 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
                 .disabled(testingLatency || authStore.serverUrl.isEmpty)
             }
+            .padding(12)
+            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+            .cornerRadius(12)
 
             Text("局域网适合在家使用，公网适合外出使用")
                 .font(.caption)
@@ -260,9 +269,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("数据管理")
 
-            Button {
-                // 导入对话
-            } label: {
+            // 导入对话
+            NavigationLink(destination: ImportView()) {
                 HStack {
                     Image(systemName: "square.and.arrow.down")
                         .font(.title2)
@@ -284,6 +292,63 @@ struct SettingsView: View {
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                }
+                .padding(12)
+                .liquidGlass(cornerRadius: 6, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+            }
+            .buttonStyle(.plain)
+
+            // 存储管理
+            NavigationLink(destination: StorageInfoView()) {
+                HStack {
+                    Image(systemName: "internaldrive")
+                        .font(.title2)
+                        .foregroundColor(.orange)
+                        .frame(width: 36, height: 36)
+                        .background(Color.orange.opacity(0.1))
+                        .cornerRadius(8)
+
+                    VStack(alignment: .leading) {
+                        Text("存储管理")
+                            .font(.subheadline)
+                        Text("查看本地存储使用情况")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(12)
+                .liquidGlass(cornerRadius: 6, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+            }
+            .buttonStyle(.plain)
+
+            // 清除缓存
+            Button {
+                clearCache()
+            } label: {
+                HStack {
+                    Image(systemName: "trash")
+                        .font(.title2)
+                        .foregroundColor(.red)
+                        .frame(width: 36, height: 36)
+                        .background(Color.red.opacity(0.1))
+                        .cornerRadius(8)
+
+                    VStack(alignment: .leading) {
+                        Text("清除缓存")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Text("清除本地消息缓存")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
                 }
                 .padding(12)
                 .liquidGlass(cornerRadius: 6, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
@@ -320,16 +385,21 @@ struct SettingsView: View {
                 .padding(12)
                 .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
 
-                HStack {
-                    Text("主题")
-                        .font(.subheadline)
-                    Spacer()
-                    Text(appState.themeMode.label)
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
+                // 更新日志
+                NavigationLink(destination: ChangelogView()) {
+                    HStack {
+                        Text("更新日志")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(12)
+                    .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+                .buttonStyle(.plain)
             }
         }
     }
@@ -372,22 +442,79 @@ struct SettingsView: View {
     private func testLatency() {
         guard !authStore.serverUrl.isEmpty else { return }
         testingLatency = true
+        latency = nil
 
         Task {
-            let start = Date()
-            // TODO: 实际测试连接
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            let end = Date()
-            let duration = Int(end.timeIntervalSince(start) * 1000)
+            do {
+                let serverUrl = authStore.serverUrl
 
-            await MainActor.run {
-                self.latency = duration
-                self.testingLatency = false
+                // 构建 URL，处理 host:port:token 格式
+                var urlString = serverUrl
+                let colonCount = serverUrl.filter { $0 == ":" }.count
+
+                // 处理特殊格式：host:port:token
+                if colonCount >= 2 && !serverUrl.hasPrefix("http") {
+                    let parts = serverUrl.split(separator: ":")
+                    if parts.count >= 2 {
+                        urlString = "http://\(parts[0]):\(parts[1])"
+                    }
+                } else if !serverUrl.hasPrefix("http://") && !serverUrl.hasPrefix("https://") {
+                    urlString = "http://\(serverUrl)"
+                }
+
+                guard let url = URL(string: "\(urlString)/api/sessions") else {
+                    await MainActor.run {
+                        self.latency = -1
+                        self.testingLatency = false
+                    }
+                    return
+                }
+
+                let start = Date()
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 15
+
+                let (_, response) = try await URLSession.shared.data(for: request)
+                let end = Date()
+                let duration = Int(end.timeIntervalSince(start) * 1000)
+
+                await MainActor.run {
+                    if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                        self.latency = duration
+                    } else {
+                        // HTTP 错误，用负数表示状态码
+                        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                        self.latency = -1 * abs(statusCode)
+                    }
+                    self.testingLatency = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.latency = -1
+                    self.testingLatency = false
+                }
             }
         }
     }
 
+    private func clearCache() {
+        // 清除本地消息缓存文件
+        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        let messagesDir = paths[0].appendingPathComponent("messages", isDirectory: true)
+        try? FileManager.default.removeItem(at: messagesDir)
+        try? FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+
+        // 清除内存中的消息
+        for key in sessionStore.messages.keys {
+            sessionStore.messages[key] = []
+        }
+    }
+
     private func formatLatency(_ ms: Int) -> String {
+        if ms <= -100 { return "HTTP \(abs(ms)) 错误" }
+        if ms == -1 { return "连接失败" }
         if ms < 100 { return "\(ms)ms (极快)" }
         if ms < 300 { return "\(ms)ms (很快)" }
         if ms < 500 { return "\(ms)ms (较快)" }
@@ -396,10 +523,11 @@ struct SettingsView: View {
     }
 
     private func latencyColor(_ ms: Int) -> Color {
-        if ms < 100 { return .green }
-        if ms < 300 { return .green }
-        if ms < 500 { return .yellow }
-        return .orange
+        if ms < 0 { return .red }
+        if ms < 100 { return Color(red: 0.133, green: 0.71, blue: 0.369) } // #22c55e
+        if ms < 300 { return Color(red: 0.518, green: 0.8, blue: 0.086) }   // #84cc16
+        if ms < 500 { return Color(red: 0.918, green: 0.702, blue: 0.031) } // #eab308
+        return Color(red: 0.976, green: 0.451, blue: 0.086)                 // #f97316
     }
 }
 

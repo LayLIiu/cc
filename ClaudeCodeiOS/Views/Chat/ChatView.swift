@@ -13,18 +13,25 @@ struct ChatView: View {
     @EnvironmentObject var authStore: AuthStore
 
     @State private var inputText = ""
+    // 流式文本本地管理（参考 RN 版本架构）
     @State private var streamingText = ""
     @State private var streamingThinking = ""
+    @State private var inTextBlock = false
+    @State private var inThinkingBlock = false
+
+    // 是否是浅色主题
+    private var isLightTheme: Bool {
+        appState.themeMode == .light
+    }
     @State private var chatStatus: SessionStatus = .idle
     @State private var contextUsage: Int = 0
     @State private var previousStatus: SessionStatus = .idle
     @State private var scrollToBottomTrigger = false
     @State private var isAtBottom = true
     @State private var showScrollButton = false
-    @State private var processedMsgIds = Set<String>()  // 去重
-    @State private var addedMessageContents = Set<String>()  // 用户消息内容去重（防止本地+echo重复）
-    @State private var inTextBlock = false
-    @State private var inThinkingBlock = false
+    @State private var userIsViewingHistory = false  // 用户是否在主动查看历史
+    // 最近发送的消息内容（用于去重 user_message_echo）
+    @State private var recentlySentMessages: Set<String> = []
 
     @FocusState private var isInputFocused: Bool
 
@@ -36,6 +43,7 @@ struct ChatView: View {
         sessionStore.messages[sessionId] ?? []
     }
 
+    // 合并 store 消息 + 本地流式消息（参考 RN 架构）
     var allMessages: [Message] {
         var result = messages
 
@@ -54,9 +62,10 @@ struct ChatView: View {
         if !streamingText.isEmpty {
             result.append(Message(
                 id: "streaming-text",
-                type: .assistantText,
+                type: .assistant,
                 content: streamingText,
-                timestamp: ISO8601DateFormatter().string(from: Date())
+                timestamp: ISO8601DateFormatter().string(from: Date()),
+                isStreaming: true
             ))
         }
 
@@ -85,6 +94,7 @@ struct ChatView: View {
                     // "最新消息"按钮 - 只在往上滚动时显示
                     if showScrollButton {
                         Button {
+                            userIsViewingHistory = false  // 用户主动回到底部
                             scrollToBottomTrigger.toggle()
                         } label: {
                             HStack(spacing: 4) {
@@ -96,7 +106,7 @@ struct ChatView: View {
                             .foregroundColor(.primary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(.ultraThinMaterial)
+                            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
                             .clipShape(Capsule())
                         }
                         .padding(.bottom, 8)
@@ -117,22 +127,34 @@ struct ChatView: View {
                         .font(.headline)
                         .foregroundColor(.adaptiveText)
 
-                    statusView
+                    // 状态行：简单居中
+                    HStack(spacing: 6) {
+                        if chatStatus != .idle && chatStatus != .completed {
+                            StatusIndicator(status: chatStatus, size: 10)
+                        }
+                        Text(statusText)
+                            .font(.caption)
+                            .foregroundColor(statusColor)
+                        if contextUsage > 0 {
+                            ContextRingView(percentage: contextUsage, size: 14, strokeWidth: 2)
+                        }
+                    }
                 }
             }
         }
         .task {
-            // 设置当前会话 ID（用于 WebSocket 消息路由）
+            // 设置当前会话 ID（用于消息路由）
+            print("[ChatView] 🔧 Setting current session: \(sessionId)")
             sessionStore.setCurrentSession(sessionId)
+
+            // 更新会话的最后修改时间（让会话移动到"今天"分组）
+            sessionStore.touchSession(sessionId)
+
+            // 请求通知权限
+            _ = await NotificationService.shared.requestAuthorization()
 
             // 先从服务端拉取最新消息（可能桌面端已产生新消息）
             await fetchLatestMessages()
-
-            // 连接 WebSocket 接收实时消息
-            let serverUrl = authStore.serverUrl
-            if !serverUrl.isEmpty {
-                sessionStore.connectWebSocket(serverUrl: serverUrl, sessionId: sessionId)
-            }
 
             // 更新状态
             if let status = sessionStore.sessionStatuses[sessionId] {
@@ -142,15 +164,36 @@ struct ChatView: View {
             if let usage = sessionStore.contextUsages[sessionId] {
                 contextUsage = usage
             }
+
+            // 确保 WebSocket 已连接（全局订阅在 MainTabView 中启动）
+            let serverUrl = authStore.serverUrl
+            print("[ChatView] 🔧 Server URL: \(serverUrl)")
+            print("[ChatView] 🔧 Is global subscribed: \(sessionStore.webSocketService.isGlobalSubscribed)")
+            print("[ChatView] 🔧 Global connections: \(sessionStore.webSocketService.globalConnections.count)")
+            if !serverUrl.isEmpty && !sessionStore.webSocketService.isGlobalSubscribed {
+                sessionStore.subscribeToAllSessions(serverUrl: serverUrl)
+            }
         }
-        // 实时监听 WebSocket 消息 - 直接更新 UI
-        .onReceive(sessionStore.webSocketService.$lastMessage) { wsMessage in
-            guard let msg = wsMessage else { return }
-            handleWSMessage(msg)
+        // 监听全局 WebSocket 消息 - 本地 State 处理流式文本
+        .onReceive(sessionStore.webSocketService.$globalLastMessage) { tuple in
+            guard let (msgSessionId, msg) = tuple else { return }
+            guard msgSessionId == sessionId else { return }
+            print("[ChatView] 📩 Received WS msg: \(msg.type)")
+            handleStreamingMessage(msg)
+        }
+        // 监听 messages 变化 - 滚动到底部
+        .onChange(of: sessionStore.messages[sessionId]?.count ?? 0) { oldValue, newValue in
+            print("[ChatView] Messages count changed: \(oldValue) -> \(newValue)")
+            if newValue > oldValue && !userIsViewingHistory {
+                // 新消息到达，只有在用户没有在查看历史时才滚动
+                scrollToBottomTrigger.toggle()
+            }
         }
         .onDisappear {
-            sessionStore.disconnectWebSocket()
+            // 只保存当前会话消息到本地，不断开 WebSocket
             sessionStore.saveMessagesToLocal(sessionId)
+            // 清除当前会话 ID
+            sessionStore.setCurrentSession(nil)
         }
         .onChange(of: sessionStore.sessionStatuses[sessionId]) { _, newStatus in
             if let status = newStatus {
@@ -194,6 +237,8 @@ struct ChatView: View {
                     }
                     .onDisappear {
                         isAtBottom = false
+                        // 用户离开了最新消息位置，标记为正在查看历史
+                        userIsViewingHistory = true
                         withAnimation(.easeInOut(duration: 0.25)) {
                             showScrollButton = true
                         }
@@ -232,26 +277,6 @@ struct ChatView: View {
         .scrollDismissesKeyboard(.interactively)
     }
 
-    // MARK: - 状态视图
-
-    private var statusView: some View {
-        HStack(spacing: 6) {
-            if chatStatus != .idle && chatStatus != .completed {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-            }
-
-            Text(statusText)
-                .font(.caption)
-                .foregroundColor(statusColor)
-
-            if contextUsage > 0 {
-                ContextRingView(percentage: contextUsage, size: 14, strokeWidth: 2)
-            }
-        }
-    }
-
     private var statusText: String {
         switch chatStatus {
         case .idle: return "等待中"
@@ -286,7 +311,7 @@ struct ChatView: View {
                 .padding(12)
                 .background(
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(.ultraThinMaterial)
+                        .fill(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.85)) : AnyShapeStyle(.ultraThinMaterial))
                 )
                 .focused($isInputFocused)
 
@@ -321,7 +346,7 @@ struct ChatView: View {
     }
 
     private func sendCompletionNotification() {
-        guard let lastAssistantMessage = messages.last(where: { $0.type == .assistantText }) else { return }
+        guard let lastAssistantMessage = messages.last(where: { $0.type == .assistant }) else { return }
 
         Task {
             await NotificationService.shared.sendCompletionNotification(
@@ -338,13 +363,27 @@ struct ChatView: View {
         do {
             let serverMessages = try await APIService.shared.getMessages(sessionId)
             let localMessages = sessionStore.messages[sessionId] ?? []
-            var existingIds = Set(localMessages.map { $0.id })
+
+            // 构建已存在内容的集合（用于内容去重）
+            var existingContents = Set<String>()
+            var existingIds = Set<String>()
+
+            for msg in localMessages {
+                existingIds.insert(msg.id)
+                // 用类型+内容作为去重键
+                existingContents.insert("\(msg.type.rawValue)-\(msg.content)")
+            }
+
             var merged = localMessages
 
             for msg in serverMessages {
-                if !existingIds.contains(msg.id) {
+                let contentKey = "\(msg.type.rawValue)-\(msg.content)"
+
+                // 先检查 ID，再检查内容
+                if !existingIds.contains(msg.id) && !existingContents.contains(contentKey) {
                     merged.append(msg)
                     existingIds.insert(msg.id)
+                    existingContents.insert(contentKey)
                 }
             }
 
@@ -357,136 +396,209 @@ struct ChatView: View {
         }
     }
 
-    // MARK: - WebSocket 消息处理（实时更新 UI）
+    // MARK: - WebSocket 流式消息处理（本地 State 驱动 UI）
 
-    private func handleWSMessage(_ msg: WSMessage) {
-        // 去重
-        let msgId = "\(msg.type.rawValue)-\(msg.timestamp ?? "")"
-        guard !processedMsgIds.contains(msgId) else { return }
-        processedMsgIds.insert(msgId)
-        if processedMsgIds.count > 200 {
-            processedMsgIds = Set(Array(processedMsgIds.suffix(100)))
-        }
-
-        // 只处理当前会话
-        let targetId = msg.sessionId ?? sessionId
-        guard targetId == sessionId else { return }
-
+    private func handleStreamingMessage(_ msg: WSMessage) {
         switch msg.type {
         case .contentStart:
-            if chatStatus == .idle || chatStatus == .completed { chatStatus = .streaming }
-            if msg.blockType == "text" { inTextBlock = true; streamingText = "" }
+            // 开始新的文本块
+            if chatStatus == .idle || chatStatus == .completed {
+                chatStatus = .streaming
+            }
+            if msg.blockType == "text" {
+                inTextBlock = true
+                streamingText = ""
+            }
 
         case .contentDelta:
-            if chatStatus == .idle || chatStatus == .completed { chatStatus = .streaming }
-            if let text = msg.text { streamingText += text }
+            // 流式文本追加到本地 state
+            if chatStatus == .idle || chatStatus == .completed {
+                chatStatus = .streaming
+            }
+            if let text = msg.text {
+                streamingText += text
+                // 流式消息时不频繁触发滚动，避免打断用户
+                // 滚动会在 messageComplete 时统一处理
+            }
 
         case .thinking:
-            if chatStatus == .idle || chatStatus == .completed { chatStatus = .thinking }
-            if !inThinkingBlock { inThinkingBlock = true; streamingThinking = "" }
-            if let text = msg.text { streamingThinking += text }
+            // 思考内容追加到本地 state
+            if chatStatus == .idle || chatStatus == .completed {
+                chatStatus = .thinking
+            }
+            if !inThinkingBlock {
+                inThinkingBlock = true
+                streamingThinking = ""
+            }
+            if let text = msg.text {
+                streamingThinking += text
+            }
 
         case .toolUseComplete:
-            flushStreaming()
+            // 工具调用完成 - 把流式缓冲区写入 store
+            flushStreamingBuffers()
+            inTextBlock = false
+            inThinkingBlock = false
+
+            // 添加工具消息
             if let toolName = msg.toolName {
                 let toolMsg = Message(
-                    id: msg.toolUseId ?? UUID().uuidString, type: .toolUse, content: "",
+                    id: msg.toolUseId ?? "tool-\(UUID().uuidString)",
+                    type: .toolUse,
+                    content: "",
                     timestamp: ISO8601DateFormatter().string(from: Date()),
-                    toolName: toolName, toolInput: msg.input, toolResult: nil, toolStatus: .running
+                    toolName: toolName,
+                    toolInput: msg.input,
+                    toolStatus: .running
                 )
                 sessionStore.addMessage(sessionId, toolMsg)
             }
             chatStatus = .toolExecuting
 
         case .toolResult:
+            // 工具结果
             if let toolUseId = msg.toolUseId, let content = msg.content {
                 let resultStr = (content.value as? String) ?? String(describing: content.value)
                 sessionStore.updateToolResult(sessionId, toolUseId, resultStr, msg.isError == true ? .failed : .completed)
             }
 
         case .messageComplete:
-            flushStreaming()
+            // 消息完成 - 把流式缓冲区写入 store
+            flushStreamingBuffers()
+            inTextBlock = false
+            inThinkingBlock = false
             chatStatus = .completed
-            sessionStore.sessionStatuses[sessionId] = .completed
-            sessionStore.saveMessagesToLocal(sessionId)
+            // 只有用户没有在查看历史时才滚动
+            if !userIsViewingHistory {
+                scrollToBottomTrigger.toggle()
+            }
 
         case .status:
             if let state = msg.state {
-                let working = ["thinking", "tool_executing", "streaming", "permission_pending", "question_pending"]
-                if working.contains(state) {
-                    chatStatus = SessionStatus(rawValue: state) ?? .streaming
-                    sessionStore.sessionStatuses[sessionId] = chatStatus
-                } else if state == "completed" {
+                print("[ChatView] 📊 Status update: \(state)")
+                switch state {
+                case "idle":
+                    chatStatus = .idle
+                case "thinking":
+                    chatStatus = .thinking
+                case "tool_executing":
+                    chatStatus = .toolExecuting
+                case "streaming":
+                    chatStatus = .streaming
+                case "permission_pending":
+                    chatStatus = .permissionPending
+                case "question_pending":
+                    chatStatus = .questionPending
+                case "completed":
                     chatStatus = .completed
-                    sessionStore.sessionStatuses[sessionId] = .completed
+                default:
+                    break
                 }
             }
 
         case .permissionRequest:
+            flushStreamingBuffers()
+            chatStatus = .permissionPending
             if let requestId = msg.requestId {
-                let permMsg = Message(
-                    id: "permission-\(requestId)", type: .permissionRequest,
-                    content: msg.description ?? "权限请求: \(msg.toolName ?? "")",
-                    timestamp: ISO8601DateFormatter().string(from: Date()),
-                    toolName: msg.toolName, permissionId: requestId, permissionDescription: msg.description
-                )
-                sessionStore.addMessage(sessionId, permMsg)
-                chatStatus = .permissionPending
+                Task {
+                    await NotificationService.shared.sendPermissionNotification(
+                        sessionId: sessionId,
+                        permissionId: requestId,
+                        toolName: msg.toolName ?? "Unknown",
+                        description: msg.description ?? ""
+                    )
+                }
             }
 
         case .question:
+            flushStreamingBuffers()
+            chatStatus = .questionPending
             if let questionId = msg.questionId {
-                let qMsg = Message(
-                    id: "question-\(questionId)", type: .question,
-                    content: msg.questionText ?? "",
-                    timestamp: ISO8601DateFormatter().string(from: Date()),
-                    questionId: questionId, options: msg.options ?? []
-                )
-                sessionStore.addMessage(sessionId, qMsg)
-                chatStatus = .questionPending
+                Task {
+                    await NotificationService.shared.sendQuestionNotification(
+                        sessionId: sessionId,
+                        questionId: questionId,
+                        question: msg.questionText ?? "",
+                        options: msg.options ?? []
+                    )
+                }
             }
 
         case .tokenUsage:
-            if let p = msg.percentage { contextUsage = Int(p * 100); sessionStore.contextUsages[sessionId] = contextUsage }
-
-        case .sessionTitleUpdated:
-            if let title = msg.title { sessionStore.updateSessionTitle(sessionId, title) }
-
-        case .userMessageEcho:
-            if let contentValue = msg.content?.value {
-                let str = contentValue is String ? (contentValue as! String) : String(describing: contentValue)
-                // 用内容去重，防止本地发送和 echo 重复
-                let contentKey = "user-\(str)"
-                guard !addedMessageContents.contains(contentKey) else { return }
-                addedMessageContents.insert(contentKey)
-                let userMsg = Message(
-                    id: msg.id ?? "user-\(UUID().uuidString)", type: .userText, content: str,
-                    timestamp: msg.timestamp ?? ISO8601DateFormatter().string(from: Date())
-                )
-                sessionStore.addMessage(sessionId, userMsg)
+            if let percentage = msg.percentage {
+                contextUsage = Int(percentage * 100)
+                sessionStore.setContextUsage(sessionId, Int(percentage * 100))
             }
 
-        case .connected, .error:
+        case .userMessageEcho:
+            print("[ChatView] 📩 Received user_message_echo for session \(sessionId)")
+            if let contentValue = msg.content?.value {
+                var contentString = (contentValue as? String) ?? String(describing: contentValue)
+                print("[ChatView] 📩 Content: \(contentString.prefix(100))")
+
+                // 解析桌面端发送的消息格式 [{"type":"text","text":"实际内容"}]
+                if contentString.hasPrefix("[") && contentString.contains("\"text\"") {
+                    if let data = contentString.data(using: .utf8),
+                       let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                        // 提取所有 text 字段拼接
+                        let texts = jsonArray.compactMap { $0["text"] as? String }
+                        if !texts.isEmpty {
+                            contentString = texts.joined(separator: "\n")
+                            print("[ChatView] 📩 Parsed desktop message: \(contentString.prefix(100))")
+                        }
+                    }
+                }
+
+                // 检查是否是最近发送的消息（iOS 端发送的会有记录）
+                if recentlySentMessages.contains(contentString) {
+                    print("[ChatView] 📩 Skipping user_message_echo - already added locally")
+                    recentlySentMessages.remove(contentString)
+                } else {
+                    // 桌面端发送的消息，需要添加到列表
+                    print("[ChatView] 📩 Adding message from desktop")
+                    let userMsg = Message(
+                        id: msg.id ?? "user-\(UUID().uuidString)",
+                        type: .user,
+                        content: contentString,
+                        timestamp: msg.timestamp ?? ISO8601DateFormatter().string(from: Date())
+                    )
+                    sessionStore.addMessage(sessionId, userMsg)
+                }
+            }
+
+        default:
             break
         }
     }
 
-    private func flushStreaming() {
+    // 把流式缓冲区写入 store（只在完成时调用）
+    private func flushStreamingBuffers() {
         if !streamingText.isEmpty {
-            let textMsg = Message(
-                id: "ws-text-\(UUID().uuidString)", type: .assistantText, content: streamingText,
-                timestamp: ISO8601DateFormatter().string(from: Date())
-            )
-            sessionStore.addMessage(sessionId, textMsg)
-            streamingText = ""; inTextBlock = false
+            // 过滤掉 JSON 格式的工具调用链消息
+            let trimmed = streamingText.trimmingCharacters(in: .whitespacesAndNewlines)
+            let shouldHide = trimmed.hasPrefix("[{") && (trimmed.contains("\"tool_use_id\"") || trimmed.contains("\"tool_result\""))
+
+            if !shouldHide {
+                let textMsg = Message(
+                    id: "assistant-\(UUID().uuidString)",
+                    type: .assistant,
+                    content: streamingText,
+                    timestamp: ISO8601DateFormatter().string(from: Date())
+                )
+                sessionStore.addMessage(sessionId, textMsg)
+            }
+            streamingText = ""
         }
+
         if !streamingThinking.isEmpty {
             let thinkMsg = Message(
-                id: "ws-think-\(UUID().uuidString)", type: .thinking, content: streamingThinking,
+                id: "thinking-\(UUID().uuidString)",
+                type: .thinking,
+                content: streamingThinking,
                 timestamp: ISO8601DateFormatter().string(from: Date())
             )
             sessionStore.addMessage(sessionId, thinkMsg)
-            streamingThinking = ""; inThinkingBlock = false
+            streamingThinking = ""
         }
     }
 
@@ -496,13 +608,16 @@ struct ChatView: View {
         let content = inputText
         inputText = ""
 
-        // 标记内容已添加，防止 echo 重复
-        addedMessageContents.insert("user-\(content)")
+        // 用户发送新消息，退出查看历史模式
+        userIsViewingHistory = false
+
+        // 记录最近发送的消息内容（用于去重 user_message_echo）
+        recentlySentMessages.insert(content)
 
         // 添加用户消息
         let userMessage = Message(
             id: "user-\(UUID().uuidString)",
-            type: .userText,
+            type: .user,
             content: content,
             timestamp: ISO8601DateFormatter().string(from: Date())
         )
@@ -511,7 +626,7 @@ struct ChatView: View {
         // 发送到 WebSocket
         sessionStore.sendMessage(content)
 
-        // 重置状态
+        // 重置流式状态
         streamingText = ""
         streamingThinking = ""
         inTextBlock = false
@@ -536,6 +651,25 @@ struct MessageBubbleView: View {
     @State private var customInputText = ""
     @FocusState private var isInputFocused: Bool
 
+    // 复制功能状态
+    @State private var showCopyButton = false
+    @State private var showCopiedIndicator = false
+
+    // 是否是浅色主题
+    private var isLightTheme: Bool {
+        appState.themeMode == .light
+    }
+
+    // 可复制的消息类型
+    private var canCopy: Bool {
+        message.type == .user || message.type == .assistant
+    }
+
+    // 要复制的内容
+    private var copyContent: String {
+        message.content
+    }
+
     init(message: Message, sessionId: String, onPermissionHandled: (() -> Void)? = nil, onQuestionAnswered: (() -> Void)? = nil) {
         self.message = message
         self.sessionId = sessionId
@@ -544,34 +678,122 @@ struct MessageBubbleView: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom) {
-            if message.type == .userText {
-                Spacer(minLength: 60)
-            }
+        VStack(spacing: 0) {
+            HStack(alignment: .bottom) {
+                if message.type == .user {
+                    Spacer(minLength: 60)
+                }
 
-            VStack(alignment: message.type == .userText ? .trailing : .leading, spacing: 4) {
-                switch message.type {
-                case .userText:
-                    userTextBubble
-                case .assistantText:
-                    assistantTextBubble
-                case .thinking:
-                    thinkingBubble
-                case .toolUse:
-                    toolUseBubble
-                case .toolResult:
-                    toolResultBubble
-                case .permissionRequest:
-                    permissionRequestBubble
-                case .question:
-                    questionBubble
-                case .taskList:
-                    taskListBubble
+                VStack(alignment: message.type == .user ? .trailing : .leading, spacing: 4) {
+                    switch message.type {
+                    case .user:
+                        userTextBubble
+                    case .assistant:
+                        assistantTextBubble
+                    case .thinking:
+                        thinkingBubble
+                    case .toolUse:
+                        toolUseBubble
+                    case .toolResult:
+                        toolResultBubble
+                    case .permissionRequest:
+                        permissionRequestBubble
+                    case .question:
+                        questionBubble
+                    case .taskList:
+                        taskListBubble
+                    }
+                }
+
+                if message.type != .user {
+                    Spacer(minLength: 60)
+                }
+            }
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.3) {
+                if canCopy {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        showCopyButton = true
+                    }
+                }
+            }
+            .onTapGesture {
+                // 点击消息时关闭复制按钮
+                if showCopyButton {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        showCopyButton = false
+                    }
                 }
             }
 
-            if message.type != .userText {
+            // 复制按钮 / 已复制提示
+            if showCopyButton || showCopiedIndicator {
+                copyActionView
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
+            }
+        }
+    }
+
+    // MARK: - 复制操作视图
+
+    private var copyActionView: some View {
+        HStack {
+            if message.type != .user {
                 Spacer(minLength: 60)
+            }
+
+            if showCopiedIndicator {
+                // 已复制提示
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text("已复制")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.green.opacity(0.1))
+                .clipShape(Capsule())
+            } else {
+                // 复制按钮
+                Button {
+                    copyToClipboard()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.on.doc")
+                        Text("复制")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.95)) : AnyShapeStyle(.ultraThinMaterial))
+                    .clipShape(Capsule())
+                }
+            }
+
+            if message.type == .user {
+                Spacer(minLength: 60)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func copyToClipboard() {
+        UIPasteboard.general.string = copyContent
+
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+            showCopyButton = false
+            showCopiedIndicator = true
+        }
+
+        // 1.5秒后隐藏已复制提示
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                showCopiedIndicator = false
             }
         }
     }
@@ -580,16 +802,32 @@ struct MessageBubbleView: View {
         Text(message.content)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
+            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
             .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 
     private var assistantTextBubble: some View {
-        MarkdownRenderer(content: message.content)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 18))
+        // 过滤掉工具调用 JSON 格式的内容
+        Group {
+            if shouldHideContent(message.content) {
+                EmptyView()
+            } else {
+                MarkdownRenderer(content: message.content)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
+            }
+        }
+    }
+
+    /// 检测是否应该隐藏内容（工具调用 JSON 格式）
+    private func shouldHideContent(_ content: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 只检测以 [{ 开头的 JSON 数组格式
+        guard trimmed.hasPrefix("[{") else { return false }
+        return trimmed.contains("\"tool_use_id\"") ||
+               trimmed.contains("\"tool_result\"")
     }
 
     private var thinkingBubble: some View {
@@ -609,34 +847,48 @@ struct MessageBubbleView: View {
     }
 
     private var toolResultBubble: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Image(systemName: "doc.text")
-                Text("结果")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                Spacer()
-                if let status = message.toolStatus {
-                    switch status {
-                    case .completed:
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                    case .failed:
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.red)
-                    default:
-                        EmptyView()
+        // 如果结果是 JSON 格式的工具调用，隐藏整个气泡
+        Group {
+            if let result = message.toolResult, !shouldHideToolResult(result) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "doc.text")
+                        Text("结果")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                        Spacer()
+                        if let status = message.toolStatus {
+                            switch status {
+                            case .completed:
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            case .failed:
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                            default:
+                                EmptyView()
+                            }
+                        }
                     }
-                }
-            }
 
-            if let result = message.toolResult {
-                MarkdownRenderer(content: result)
+                    MarkdownRenderer(content: result)
+                }
+                .padding(12)
+                .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            } else {
+                EmptyView()
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// 检测是否应该隐藏工具结果（JSON 格式的工具调用）
+    private func shouldHideToolResult(_ result: String) -> Bool {
+        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 只检测以 [{ 开头的 JSON 数组格式
+        guard trimmed.hasPrefix("[{") else { return false }
+        return trimmed.contains("\"tool_use_id\"") ||
+               trimmed.contains("\"tool_result\"")
     }
 
     // MARK: - 权限请求气泡
@@ -725,7 +977,7 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
+        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -844,7 +1096,7 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
+        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -939,7 +1191,7 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
+        .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 

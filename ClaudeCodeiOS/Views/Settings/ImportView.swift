@@ -5,7 +5,11 @@ import SwiftUI
 struct ImportView: View {
     @EnvironmentObject var sessionStore: SessionStore
     @EnvironmentObject var authStore: AuthStore
+    @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
+
+    private var isDark: Bool { appState.themeMode == .dark || appState.themeMode == .glass }
+    private var isLightTheme: Bool { appState.themeMode == .light }
 
     @State private var serverSessions: [Session] = []
     @State private var isLoading = true
@@ -27,7 +31,7 @@ struct ImportView: View {
     var body: some View {
         ZStack {
             Color.clear
-                .liquidGlassBackground(isDark: false)
+                .liquidGlassBackground(isDark: isDark)
                 .ignoresSafeArea()
 
             if isLoading {
@@ -38,6 +42,7 @@ struct ImportView: View {
         }
         .navigationTitle("导入对话")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -276,7 +281,7 @@ struct ImportView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.ultraThinMaterial)
+            .background(isLightTheme ? AnyShapeStyle(Color.white.opacity(0.9)) : AnyShapeStyle(.ultraThinMaterial))
         }
     }
 

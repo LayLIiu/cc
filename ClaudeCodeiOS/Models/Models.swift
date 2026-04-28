@@ -27,14 +27,43 @@ struct Session: Identifiable, Codable, Hashable {
 // MARK: - 消息模型
 
 enum MessageType: String, Codable {
-    case userText = "user_text"
-    case assistantText = "assistant_text"
+    case user
+    case assistant
     case thinking
     case toolUse = "tool_use"
     case toolResult = "tool_result"
     case permissionRequest = "permission_request"
     case question
     case taskList = "task_list"
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+
+        switch rawValue {
+        case "user", "user_text":
+            self = .user
+        case "assistant", "assistant_text":
+            self = .assistant
+        case "thinking":
+            self = .thinking
+        case "tool_use":
+            self = .toolUse
+        case "tool_result":
+            self = .toolResult
+        case "permission_request":
+            self = .permissionRequest
+        case "question":
+            self = .question
+        case "task_list":
+            self = .taskList
+        default:
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Unknown MessageType: \(rawValue)"
+            )
+        }
+    }
 }
 
 enum ToolStatus: String, Codable {
