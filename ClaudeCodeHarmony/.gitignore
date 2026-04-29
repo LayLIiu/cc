@@ -1,0 +1,21 @@
+# HarmonyOS 项目忽略文件
+
+# 编译输出
+.idea/
+.hvigor/
+build/
+oh_modules/
+
+# 本地配置
+local.properties
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+*.temp

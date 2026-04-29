@@ -15,3 +15,37 @@ web-build/
 
 expo-env.d.ts
 # @end expo-cli
+
+# Android
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+captures/
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+
+# iOS
+*.xcworkspace
+!*.xcworkspace/contents.xcworkspacedata
+*.xcuserdata
+xcuserdata/
+*.xcuserstate
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+Pods/
+
+# HarmonyOS
+.claude/
+oh_modules/
+
+# Secrets
+*.env
+*.env.local
+secrets/

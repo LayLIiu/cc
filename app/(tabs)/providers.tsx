@@ -537,7 +537,7 @@ const styles = StyleSheet.create({
   },
   section: {
     marginTop: 16,
-    padding: 16,
+    padding: 20,
   },
   sectionTitle: {
     fontSize: 12,
@@ -675,7 +675,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 16,
     borderBottomWidth: 1,
   },
   settingInfo: {

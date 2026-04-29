@@ -41,6 +41,8 @@ struct ChatView: View {
     @State private var isAtBottom = true
     @State private var showScrollButton = false
     @State private var userIsViewingHistory = false  // 用户是否在主动查看历史
+    // Token 使用量
+    @State private var tokenUsage: Int = 0
     // 最近发送的消息内容（用于去重 user_message_echo）
     @State private var recentlySentMessages: Set<String> = []
 
@@ -54,19 +56,29 @@ struct ChatView: View {
         sessionStore.messages[sessionId] ?? []
     }
 
-    // 分页后的消息（只显示最近 N 条）
-    var visibleMessages: [Message] {
+    // 分页后的消息（只显示最近 N 条）- 缓存优化
+    @State private var cachedVisibleMessages: [Message] = []
+    @State private var lastMessagesCount = 0
+
+    // 更新可见消息缓存
+    private func updateVisibleMessagesCache() {
         let allMessages = messages
-        if allMessages.count <= displayedMessageCount {
-            return allMessages
+        let currentCount = allMessages.count
+
+        // 只在消息数量变化时更新缓存
+        if currentCount != lastMessagesCount {
+            lastMessagesCount = currentCount
+            if currentCount <= displayedMessageCount {
+                cachedVisibleMessages = allMessages
+            } else {
+                cachedVisibleMessages = Array(allMessages.suffix(displayedMessageCount))
+            }
         }
-        // 显示最近的 N 条消息
-        return Array(allMessages.suffix(displayedMessageCount))
     }
 
     // 合并 store 消息 + 本地流式消息
     var allMessages: [Message] {
-        var result = visibleMessages
+        var result = cachedVisibleMessages
 
         // 添加流式思考（正在生成）
         if !streamingThinking.isEmpty {
@@ -91,6 +103,18 @@ struct ChatView: View {
         }
 
         return result
+    }
+
+    // 缓存倒序消息，避免每次访问都创建新数组
+    @State private var cachedReversedMessages: [Message] = []
+
+    private var reversedMessages: [Message] {
+        let current = allMessages
+        // 简单比较引用或数量，避免不必要的反转
+        if cachedReversedMessages.count != current.count {
+            cachedReversedMessages = current.reversed()
+        }
+        return cachedReversedMessages
     }
 
     var body: some View {
@@ -163,6 +187,21 @@ struct ChatView: View {
                     }
                 }
             }
+
+            // 测试按钮（仅调试模式）
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Menu {
+                    Button("模拟权限请求") {
+                        sessionStore.simulatePermissionRequest()
+                    }
+                    Button("模拟问题") {
+                        sessionStore.simulateQuestion()
+                    }
+                } label: {
+                    Image(systemName: "ladybug.fill")
+                        .foregroundColor(.orange)
+                }
+            }
         }
         .task {
             // 设置当前会话 ID（用于消息路由）
@@ -172,8 +211,21 @@ struct ChatView: View {
             // 更新会话的最后修改时间（让会话移动到"今天"分组）
             sessionStore.touchSession(sessionId)
 
-            // 初始化分页状态
+            // 初始化分页状态和缓存
             updatePaginationState()
+            updateVisibleMessagesCache()
+
+            // 🔥 确保 WebSocket 已订阅该会话
+            let serverUrl = authStore.serverUrl
+            print("[ChatView] 🔧 Server URL: \(serverUrl)")
+            print("[ChatView] 🔧 Is global subscribed: \(sessionStore.webSocketService.isGlobalSubscribed)")
+            print("[ChatView] 🔧 Subscribed sessions: \(sessionStore.webSocketService.subscribedSessions)")
+            print("[ChatView] 🔧 Global connections: \(sessionStore.webSocketService.globalConnections.keys)")
+
+            if !serverUrl.isEmpty {
+                // 始终尝试订阅当前会话，确保不会遗漏
+                sessionStore.subscribeToSession(serverUrl: serverUrl, sessionId: sessionId)
+            }
 
             // 先从服务端拉取最新消息（可能桌面端已产生新消息）
             await fetchLatestMessages()
@@ -186,15 +238,6 @@ struct ChatView: View {
             if let usage = sessionStore.contextUsages[sessionId] {
                 contextUsage = usage
             }
-
-            // 确保 WebSocket 已连接（全局订阅在 MainTabView 中启动）
-            let serverUrl = authStore.serverUrl
-            print("[ChatView] 🔧 Server URL: \(serverUrl)")
-            print("[ChatView] 🔧 Is global subscribed: \(sessionStore.webSocketService.isGlobalSubscribed)")
-            print("[ChatView] 🔧 Global connections: \(sessionStore.webSocketService.globalConnections.count)")
-            if !serverUrl.isEmpty && !sessionStore.webSocketService.isGlobalSubscribed {
-                sessionStore.subscribeToAllSessions(serverUrl: serverUrl)
-            }
         }
         // 监听全局 WebSocket 消息 - 本地 State 处理流式文本
         .onReceive(sessionStore.webSocketService.$globalLastMessage) { tuple in
@@ -206,8 +249,9 @@ struct ChatView: View {
         // 监听 messages 变化 - 滚动到底部
         .onChange(of: sessionStore.messages[sessionId]?.count ?? 0) { oldValue, newValue in
             print("[ChatView] Messages count changed: \(oldValue) -> \(newValue)")
-            // 更新分页状态
+            // 更新分页状态和缓存
             updatePaginationState()
+            updateVisibleMessagesCache()
             if newValue > oldValue && !userIsViewingHistory {
                 // 新消息到达，只有在用户没有在查看历史时才滚动
                 scrollToBottomTrigger.toggle()
@@ -219,6 +263,14 @@ struct ChatView: View {
             // 清除当前会话 ID
             sessionStore.setCurrentSession(nil)
         }
+        .onAppear {
+            hideTabBar = true
+            // 🔥 每次出现时检查并修复 WebSocket 连接
+            let serverUrl = authStore.serverUrl
+            if !serverUrl.isEmpty {
+                sessionStore.subscribeToSession(serverUrl: serverUrl, sessionId: sessionId)
+            }
+        }
         .onChange(of: sessionStore.sessionStatuses[sessionId]) { _, newStatus in
             if let status = newStatus {
                 chatStatus = status
@@ -228,9 +280,6 @@ struct ChatView: View {
             if let usage = newUsage {
                 contextUsage = usage
             }
-        }
-        .onAppear {
-            hideTabBar = true
         }
         .onDisappear {
             animateTabBar = true
@@ -261,6 +310,21 @@ struct ChatView: View {
                             showScrollButton = true
                         }
                     }
+
+                // 流式处理指示器 - 独立组件避免触发父视图重绘
+                // 由于列表倒序，这个指示器放在 ForEach 之前，翻转后显示在视觉底部
+                // 只在 AI 工作时显示：thinking / tool_executing / streaming
+                if chatStatus == .thinking || chatStatus == .toolExecuting || chatStatus == .streaming {
+                    StreamingStatusView(
+                        status: chatStatus,
+                        tokenCount: tokenUsage
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                    .rotationEffect(.degrees(180))
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
 
                 // 消息倒序排列（最新在上方 = 视觉上的底部）
                 ForEach(allMessages.reversed()) { message in
@@ -513,6 +577,10 @@ struct ChatView: View {
             inTextBlock = false
             inThinkingBlock = false
             chatStatus = .completed
+            // 更新 token 使用量
+            if let outputTokens = msg.used {
+                tokenUsage = outputTokens
+            }
             // 只有用户没有在查看历史时才滚动
             if !userIsViewingHistory {
                 scrollToBottomTrigger.toggle()

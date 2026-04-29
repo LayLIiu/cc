@@ -14,6 +14,7 @@ const THEME_OPTIONS: { mode: ThemeMode; label: string; icon: string }[] = [
   { mode: 'light', label: '浅色', icon: '☀️' },
   { mode: 'dark', label: '深色', icon: '🌙' },
   { mode: 'system', label: '跟随系统', icon: '💻' },
+  { mode: 'glass', label: '液态玻璃', icon: '🔮' },
 ]
 
 export default function SettingsScreen() {
@@ -563,7 +564,7 @@ const styles = StyleSheet.create({
   },
   card: {
     borderRadius: 12,
-    padding: 16,
+    padding: 20,
   },
   row: {
     flexDirection: 'row',
@@ -575,6 +576,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 4,
   },
   modeSwitch: {
     flexDirection: 'row',
@@ -594,6 +596,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 4,
   },
   urlInfo: {
     flex: 1,
@@ -618,12 +621,13 @@ const styles = StyleSheet.create({
   },
   divider: {
     height: 1,
-    marginVertical: 12,
+    marginVertical: 16,
   },
   latencyRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 4,
   },
   latencyInfo: {
     flex: 1,

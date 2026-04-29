@@ -9,8 +9,10 @@ import {
   Text,
   TouchableOpacity,
   Animated,
+  AppState,
 } from 'react-native'
 import { useLocalSearchParams, Stack, useNavigation } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useSharedWebSocket } from '@/hooks/useSharedWebSocket'
 import { MessageBubble } from '@/components/MessageBubble'
@@ -18,7 +20,12 @@ import { ChatInput } from '@/components/ChatInput'
 import { PermissionDialog } from '@/components/chat/PermissionDialog'
 import { QuestionDialog } from '@/components/chat/QuestionDialog'
 import { useTheme } from '@/utils/theme'
+import { useAuthStore } from '@/stores/authStore'
 import { ContextRing } from '@/components/shared/ContextRing'
+import {
+  requestNotificationPermission,
+  sendCompletionNotification,
+} from '@/utils/notifications'
 import type { Message } from '@/types/session'
 
 const SCREEN_VERSION = 'v1.1.0 - 02:40'
@@ -40,6 +47,26 @@ export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const { colors } = useTheme()
   const navigation = useNavigation()
+  const insets = useSafeAreaInsets()
+  const themeMode = useAuthStore((state) => state.themeMode)
+  const isGlass = themeMode === 'glass'
+
+  // 追踪 app 是否在后台（用于决定是否发送通知）
+  const appStateRef = useRef(AppState.currentState)
+  const isBackground = appStateRef.current !== 'active'
+
+  // 请求通知权限
+  useEffect(() => {
+    requestNotificationPermission()
+  }, [])
+
+  // 监听 app 状态变化
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState
+    })
+    return () => subscription.remove()
+  }, [])
 
   const {
     messages,
@@ -440,6 +467,15 @@ export default function ChatScreen() {
         setChatStatus('completed')
         setStatusVerb('')
 
+        // App 在后台时发送完成通知
+        if (appStateRef.current !== 'active') {
+          const lastMessage = messages[0] // messages 是倒序的，第一条是最新的
+          const lastContent = lastMessage?.type === 'assistant'
+            ? lastMessage.content
+            : streamingTextRef.current || '回复已完成'
+          sendCompletionNotification(session?.title || '对话', lastContent)
+        }
+
         // 清除之前的 completed 定时器
         if (completedStatusTimerRef.current) {
           clearTimeout(completedStatusTimerRef.current)
@@ -523,6 +559,15 @@ export default function ChatScreen() {
               }
               setChatStatus('completed')
               setStatusVerb('')
+
+              // App 在后台时发送完成通知
+              if (appStateRef.current !== 'active') {
+                const lastMsg = messages.find(m => m.type === 'assistant')
+                sendCompletionNotification(
+                  session?.title || '对话',
+                  lastMsg?.content || '回复已完成'
+                )
+              }
 
               // 清除之前的 completed 定时器
               if (completedStatusTimerRef.current) {
@@ -816,7 +861,14 @@ export default function ChatScreen() {
             inverted
             keyExtractor={(item) => item.id}
             renderItem={renderMessage}
-            contentContainerStyle={[styles.listContent, { backgroundColor: colors.background }]}
+            contentContainerStyle={[
+              styles.listContent,
+              {
+                backgroundColor: colors.background,
+                // glass 模式下补偿透明导航栏高度
+                paddingTop: isGlass ? insets.top + 44 : undefined,
+              },
+            ]}
             onScroll={handleScroll}
             scrollEventThrottle={100}
             removeClippedSubviews={true}
@@ -915,6 +967,12 @@ export default function ChatScreen() {
           headerTitle: HeaderTitle,
           headerBackTitle: '返回',
           headerTitleAlign: 'center',
+          // 聊天页面始终使用不透明深色导航栏，不使用液态玻璃
+          headerTransparent: false,
+          headerStyle: {
+            backgroundColor: colors.surface,
+          },
+          headerTintColor: colors.text,
         }}
       />
       {Platform.OS === 'ios' ? (

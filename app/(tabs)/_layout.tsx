@@ -1,5 +1,6 @@
 import { Tabs, usePathname, useRouter } from 'expo-router'
-import { View, StyleSheet, Keyboard } from 'react-native'
+import { View, StyleSheet, Keyboard, Platform } from 'react-native'
+import { BlurView } from 'expo-blur'
 import { useTheme } from '@/utils/theme'
 import { SegmentedTab, TabItem } from '@/components/SegmentedTab'
 import { MascotWidget } from '@/components/shared/MascotWidget'
@@ -11,7 +12,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 export default function TabsLayout() {
-  const { colors, isDark } = useTheme()
+  const { colors, isDark, isGlass } = useTheme()
   const pathname = usePathname()
   const router = useRouter()
   const sessionStatuses = useSessionStore((state) => state.sessionStatuses)
@@ -100,24 +101,44 @@ export default function TabsLayout() {
       </Tabs>
 
       {/* Bottom Tab Bar - iOS Style */}
-      <View
-        style={[
-          styles.tabBarContainer,
-          {
-            bottom: tabBarBottom,
-            backgroundColor: isDark
-              ? 'rgba(30, 30, 30, 0.85)'
-              : 'rgba(255, 255, 255, 0.85)',
-          },
-        ]}
-        pointerEvents={keyboardVisible ? 'none' : 'auto'}
-      >
-        <SegmentedTab
-          tabs={tabs}
-          activeTab={currentTab}
-          onTabPress={handleTabPress}
-        />
-      </View>
+      {isGlass ? (
+        // glass 模式：BlurView 毛玻璃/液态玻璃效果
+        <BlurView
+          intensity={80}
+          tint="dark"
+          style={[
+            styles.tabBarContainer,
+            { bottom: tabBarBottom },
+          ]}
+          pointerEvents={keyboardVisible ? 'none' : 'auto'}
+        >
+          <SegmentedTab
+            tabs={tabs}
+            activeTab={currentTab}
+            onTabPress={handleTabPress}
+          />
+        </BlurView>
+      ) : (
+        // 普通模式：半透明纯色背景
+        <View
+          style={[
+            styles.tabBarContainer,
+            {
+              bottom: tabBarBottom,
+              backgroundColor: isDark
+                ? 'rgba(30, 30, 30, 0.85)'
+                : 'rgba(255, 255, 255, 0.85)',
+            },
+          ]}
+          pointerEvents={keyboardVisible ? 'none' : 'auto'}
+        >
+          <SegmentedTab
+            tabs={tabs}
+            activeTab={currentTab}
+            onTabPress={handleTabPress}
+          />
+        </View>
+      )}
     </View>
   )
 }

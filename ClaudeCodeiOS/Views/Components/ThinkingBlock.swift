@@ -28,11 +28,11 @@ struct ThinkingBlock: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    // 戴安娜 Logo 动画
-                    ClaudeLogoWidget(
-                        size: 16,
-                        mode: isStreaming ? .thinking : .idle
-                    )
+                    // 思考图标 - 使用大脑图标代替戴安娜
+                    Image(systemName: "brain")
+                        .font(.system(size: 12))
+                        .foregroundColor(.orange)
+                        .symbolEffect(.pulse, options: .repeating, isActive: isStreaming)
 
                     Text("thinking")
                         .font(.system(size: 11, weight: .medium))
@@ -92,17 +92,18 @@ struct ThinkingBlock: View {
     }
 }
 
-// MARK: - 流式指示器
+// MARK: - 流式指示器（thinking之前的指示器，使用其他思考图标）
 
 struct StreamingIndicator: View {
     let text: String
 
     var body: some View {
         HStack(spacing: 8) {
-            ClaudeLogoWidget(
-                size: 20,
-                mode: .thinking
-            )
+            // 使用其他思考图标代替戴安娜
+            Image(systemName: "sparkles")
+                .font(.system(size: 12))
+                .foregroundColor(.orange)
+                .symbolEffect(.pulse, options: .repeating)
 
             if !text.isEmpty {
                 Text(text)
@@ -114,6 +115,182 @@ struct StreamingIndicator: View {
         .padding(.vertical, 8)
         .background(Color.secondary.opacity(0.08))
         .clipShape(Capsule())
+    }
+}
+
+// MARK: - 消息状态指示器（最后一条消息旁边的戴安娜）
+
+struct MessageStatusIndicator: View {
+    var status: SessionStatus = .thinking
+    var elapsedSeconds: Int = 0
+    var tokenCount: Int = 0
+
+    // 戴安娜状态映射
+    private var mascotStatus: MascotStatus {
+        switch status {
+        case .thinking, .streaming: return .processing
+        case .toolExecuting: return .processing
+        case .permissionPending, .questionPending: return .waitingApproval
+        case .completed: return .completed
+        default: return .processing
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // 戴安娜图标
+            PixelMascot(size: 18, status: mascotStatus)
+
+            // 状态文字
+            Text(statusText)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+
+            // 已用时间
+            if elapsedSeconds > 0 {
+                Text(formatElapsed(elapsedSeconds))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+
+            // Token 数量
+            if tokenCount > 0 {
+                Text("· ↓ \(tokenCount)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
+        )
+    }
+
+    private var statusText: String {
+        switch status {
+        case .thinking: return "思考中..."
+        case .streaming: return "工作中..."
+        case .toolExecuting: return "执行中..."
+        case .permissionPending: return "等待权限..."
+        case .questionPending: return "等待回答..."
+        default: return "处理中..."
+        }
+    }
+
+    private func formatElapsed(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        let m = seconds / 60
+        let s = seconds % 60
+        return "\(m)m \(s)s"
+    }
+}
+
+// MARK: - 流式状态视图（独立管理计时器，避免触发父视图重绘）
+
+struct StreamingStatusView: View {
+    let status: SessionStatus
+    let tokenCount: Int
+
+    @State private var elapsedSeconds: Int = 0
+    @State private var timer: Timer?
+
+    // 戴安娜状态映射
+    private var mascotStatus: MascotStatus {
+        switch status {
+        case .thinking, .streaming: return .processing
+        case .toolExecuting: return .processing
+        default: return .processing
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // 戴安娜图标
+            PixelMascot(size: 18, status: mascotStatus)
+
+            // 状态文字
+            Text(statusText)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+
+            // 已用时间
+            if elapsedSeconds > 0 {
+                Text(formatElapsed(elapsedSeconds))
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+
+            // Token 数量
+            if tokenCount > 0 {
+                Text("· ↓ \(tokenCount)")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            Capsule()
+                .stroke(Color.primary.opacity(0.1), lineWidth: 0.5)
+        )
+        .onAppear {
+            startTimer()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+        .onChange(of: status) { _, newStatus in
+            // 状态变化时重置计时器
+            let isWorking = newStatus == .thinking || newStatus == .streaming || newStatus == .toolExecuting
+            if isWorking {
+                elapsedSeconds = 0
+            }
+        }
+    }
+
+    private var statusText: String {
+        switch status {
+        case .thinking: return "思考中..."
+        case .streaming: return "工作中..."
+        case .toolExecuting: return "执行中..."
+        default: return "处理中..."
+        }
+    }
+
+    private func startTimer() {
+        elapsedSeconds = 0
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            DispatchQueue.main.async {
+                elapsedSeconds += 1
+            }
+        }
+    }
+
+    private func stopTimer() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func formatElapsed(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        let m = seconds / 60
+        let s = seconds % 60
+        return "\(m)m \(s)s"
     }
 }
 
@@ -184,6 +361,8 @@ struct StatusIndicator: View {
                 isStreaming: true
             )
             StreamingIndicator(text: "正在生成回答")
+            MessageStatusIndicator(status: .thinking, elapsedSeconds: 5)
+            MessageStatusIndicator(status: .toolExecuting, elapsedSeconds: 15, tokenCount: 150)
 
             HStack(spacing: 20) {
                 StatusIndicator(status: .idle, size: 32)

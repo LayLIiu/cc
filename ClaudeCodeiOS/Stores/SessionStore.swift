@@ -195,12 +195,18 @@ class SessionStore: ObservableObject {
                 let currentStatus = self.sessionStatuses[sessionId]
                 if message.type == .thinking {
                     self.sessionStatuses[sessionId] = .thinking
+                    // 更新灵动岛 - 统一显示为"工作中"
+                    self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "工作中...")
                 } else if currentStatus != .streaming && currentStatus != .thinking {
                     self.sessionStatuses[sessionId] = .streaming
+                    // 更新灵动岛
+                    self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "工作中...")
                 }
 
             case .toolUseComplete:
                 self.sessionStatuses[sessionId] = .toolExecuting
+                // 更新灵动岛 - 统一显示为"工作中"
+                self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "工作中...")
 
             case .toolResult:
                 break // 非当前会话不关心工具结果
@@ -211,14 +217,19 @@ class SessionStore: ObservableObject {
                 // 触发 objectWillChange 让会话列表刷新
                 self.objectWillChange.send()
 
+                // 获取最后一条助手消息
+                let lastAssistantMsg = self.messages[sessionId]?.last(where: { $0.type == .assistant })
+                let lastMessage = lastAssistantMsg?.content ?? ""
+
+                // 完成灵动岛
+                LiveActivityService.shared.completeWork(lastMessage: lastMessage)
+
                 // 🔔 非当前会话发送完成通知
                 if !isCurrentSession {
                     // 非当前会话，发送通知
                     Task {
                         let sessionTitle = self.sessions.first { $0.id == sessionId }?.title ?? "对话"
-                        // 获取最后一条助手消息作为通知内容
-                        let lastAssistantMsg = self.messages[sessionId]?.last(where: { $0.type == .assistant })
-                        let content = lastAssistantMsg?.content ?? "工作完成"
+                        let content = lastMessage.isEmpty ? "工作完成" : lastMessage
                         await NotificationService.shared.sendCompletionNotification(
                             title: sessionTitle,
                             message: content
@@ -228,6 +239,8 @@ class SessionStore: ObservableObject {
 
             case .permissionRequest:
                 self.sessionStatuses[sessionId] = .permissionPending
+                // 更新灵动岛 - 统一显示为"工作中"
+                self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待权限...")
                 // 🔔 非当前会话发送权限通知
                 if !isCurrentSession, let requestId = message.requestId {
                     Task {
@@ -242,6 +255,8 @@ class SessionStore: ObservableObject {
 
             case .question:
                 self.sessionStatuses[sessionId] = .questionPending
+                // 更新灵动岛 - 统一显示为"工作中"
+                self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待回答...")
                 // 🔔 非当前会话发送问题通知
                 if !isCurrentSession, let questionId = message.questionId {
                     Task {
@@ -625,7 +640,7 @@ class SessionStore: ObservableObject {
     private func addPermissionRequestMessage(_ sessionId: String, _ requestId: String, _ toolName: String, _ description: String?) {
         let message = Message(
             id: "permission-\(requestId)",
-            type: .user,
+            type: .permissionRequest,
             content: description ?? "权限请求: \(toolName)",
             timestamp: sharedDateFormatter.string(from: Date()),
             toolName: toolName,
@@ -634,12 +649,13 @@ class SessionStore: ObservableObject {
         )
         addMessage(sessionId, message)
         sessionStatuses[sessionId] = .permissionPending
+        print("[SessionStore] 🔐 Added permission request message: \(requestId)")
     }
 
     private func addQuestionMessage(_ sessionId: String, _ questionId: String, _ questionText: String, _ options: [String]) {
         let message = Message(
             id: "question-\(questionId)",
-            type: .user,
+            type: .question,
             content: questionText,
             timestamp: sharedDateFormatter.string(from: Date()),
             questionId: questionId,
@@ -647,6 +663,7 @@ class SessionStore: ObservableObject {
         )
         addMessage(sessionId, message)
         sessionStatuses[sessionId] = .questionPending
+        print("[SessionStore] ❓ Added question message: \(questionId)")
     }
 
     // MARK: - API 操作
@@ -718,6 +735,49 @@ class SessionStore: ObservableObject {
             // 删除本地消息文件
             let url = messagesFilePath(for: sessionId)
             try? FileManager.default.removeItem(at: url)
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    /// 只删除本地会话数据（不从服务器删除，可重新导入）
+    @MainActor
+    func deleteLocalSession(_ sessionId: String) {
+        // 从本地列表移除
+        sessions.removeAll { $0.id == sessionId }
+        // 清除消息缓存
+        messages.removeValue(forKey: sessionId)
+        sessionStatuses.removeValue(forKey: sessionId)
+        contextUsages.removeValue(forKey: sessionId)
+        // 保存本地数据
+        saveSessions()
+        // 删除本地消息文件
+        let url = messagesFilePath(for: sessionId)
+        try? FileManager.default.removeItem(at: url)
+        // 断开该会话的 WebSocket 连接
+        webSocketService.disconnectGlobal(sessionId: sessionId)
+        print("[SessionStore] ✅ Deleted local session: \(sessionId)")
+    }
+
+    @MainActor
+    func renameSession(_ sessionId: String, newTitle: String) async {
+        do {
+            try await APIService.shared.renameSession(sessionId, title: newTitle)
+            // 更新本地数据
+            if let index = sessions.firstIndex(where: { $0.id == sessionId }) {
+                let old = sessions[index]
+                sessions[index] = Session(
+                    id: old.id,
+                    title: newTitle,
+                    projectPath: old.projectPath,
+                    workDir: old.workDir,
+                    workDirExists: old.workDirExists,
+                    createdAt: old.createdAt,
+                    modifiedAt: sharedDateFormatter.string(from: Date()),
+                    messageCount: old.messageCount
+                )
+                saveSessions()
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -922,6 +982,20 @@ class SessionStore: ObservableObject {
         print("[SessionStore] ✅ Subscribed to \(sessionIds.count) sessions globally")
     }
 
+    /// 订阅单个会话（进入聊天页面时确保已订阅）
+    func subscribeToSession(serverUrl: String, sessionId: String) {
+        guard !serverUrl.isEmpty else { return }
+        // 检查是否已订阅
+        if !webSocketService.subscribedSessions.contains(sessionId) {
+            print("[SessionStore] 📡 Subscribing to session: \(sessionId)")
+            webSocketService.subscribeToAllSessions(serverUrl: serverUrl, sessionIds: [sessionId])
+        }
+        // 确保连接正常
+        webSocketService.ensureSessionConnected(serverUrl: serverUrl, sessionId: sessionId)
+        // 确保全局订阅标记为 true
+        globalWSSubscribed = true
+    }
+
     /// 更新订阅列表（当会话列表变化时调用）
     func updateGlobalSubscription(serverUrl: String) {
         guard globalWSSubscribed else { return }
@@ -976,6 +1050,17 @@ class SessionStore: ObservableObject {
         }
         print("[SessionStore] 📤 sendMessage: sessionId=\(sessionId), globalWSSubscribed=\(globalWSSubscribed)")
         print("[SessionStore] 📤 globalConnections: \(webSocketService.globalConnections.keys)")
+
+        // 🎯 发送消息时立即启动灵动岛
+        let sessionTitle = sessions.first { $0.id == sessionId }?.title ?? "对话"
+        print("[LiveActivity] 🚀 Starting activity on sendMessage")
+        LiveActivityService.shared.startActivity(
+            sessionId: sessionId,
+            sessionTitle: sessionTitle,
+            initialStatus: .working,
+            initialStatusText: "发送中..."
+        )
+
         let message = OutgoingMessage.userMessage(content)
 
         // 优先使用全局 WebSocket
@@ -1023,6 +1108,32 @@ class SessionStore: ObservableObject {
         }
     }
 
+    // MARK: - 测试方法（用于模拟权限请求和问题）
+
+    /// 模拟权限请求（用于测试 UI）
+    func simulatePermissionRequest() {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ simulatePermissionRequest: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 🧪 Simulating permission request for session: \(sessionId)")
+        let requestId = "test-permission-\(UUID().uuidString.prefix(8))"
+        addPermissionRequestMessage(sessionId, requestId, "Bash", "执行命令: echo 'Hello World'")
+        updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待权限...")
+    }
+
+    /// 模拟问题请求（用于测试 UI）
+    func simulateQuestion() {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ simulateQuestion: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 🧪 Simulating question for session: \(sessionId)")
+        let questionId = "test-question-\(UUID().uuidString.prefix(8))"
+        addQuestionMessage(sessionId, questionId, "请选择一个选项进行测试", ["选项 A", "选项 B", "选项 C"])
+        updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待回答...")
+    }
+
     // MARK: - 导入会话
 
     @MainActor
@@ -1062,6 +1173,40 @@ class SessionStore: ObservableObject {
             return (0, "导入失败，请检查网络连接")
         }
         return (importedCount, nil)
+    }
+
+    // MARK: - 灵动岛更新
+
+    /// 更新灵动岛状态
+    private func updateLiveActivity(sessionId: String, status: ClaudeWorkStatus, statusText: String) {
+        print("[LiveActivity] 🔄 updateLiveActivity called - sessionId: \(sessionId), currentSessionId: \(currentSessionId ?? "nil"), status: \(status.rawValue)")
+
+        // 如果是当前会话，启动或更新灵动岛
+        if currentSessionId == sessionId {
+            let sessionTitle = sessions.first { $0.id == sessionId }?.title ?? "对话"
+            print("[LiveActivity] ✅ Session match! Title: \(sessionTitle)")
+
+            // 检查灵动岛是否已启动，或者是否需要重置（从 completed 状态开始新工作）
+            let currentStatus = LiveActivityService.shared.currentStatus
+            let needsRestart = LiveActivityService.shared.currentActivity == nil || currentStatus == .completed
+
+            print("[LiveActivity] 📊 currentStatus: \(currentStatus?.rawValue ?? "nil"), needsRestart: \(needsRestart)")
+
+            if needsRestart {
+                print("[LiveActivity] 🚀 Starting new activity with status: \(status.rawValue)")
+                LiveActivityService.shared.startActivity(
+                    sessionId: sessionId,
+                    sessionTitle: sessionTitle,
+                    initialStatus: status,
+                    initialStatusText: statusText
+                )
+            } else {
+                print("[LiveActivity] 📝 Updating existing activity to: \(status.rawValue)")
+                LiveActivityService.shared.updateStatus(status: status, statusText: statusText)
+            }
+        } else {
+            print("[LiveActivity] ⏭️ Session not current, skipping")
+        }
     }
 
     // MARK: - 辅助方法：过滤 tool_result 内容

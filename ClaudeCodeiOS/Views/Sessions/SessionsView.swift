@@ -109,6 +109,10 @@ struct SessionsView: View {
         .task {
             await sessionStore.fetchSessions()
         }
+        // 定期刷新会话列表（每 30 秒）以同步标题
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            Task { await sessionStore.fetchSessions() }
+        }
         .onChange(of: appState.pendingNavigateToSession) { _, newSessionId in
             // 监听通知点击，导航到对应会话
             if let sessionId = newSessionId {
@@ -119,31 +123,179 @@ struct SessionsView: View {
     }
 
     private var sessionList: some View {
-        ScrollView {
-            LazyVStack(spacing: 16) {
-                ForEach(filteredSessions, id: \.title) { group in
-                    SessionGroupView(
-                        title: group.title,
-                        sessions: group.sessions,
-                        onSelect: { session in
-                            navigateToChat = session.id
-                        },
-                        onDelete: { session in
-                            Task { await sessionStore.deleteSession(session.id) }
-                        }
-                    )
+        List {
+            ForEach(filteredSessions, id: \.title) { group in
+                Section(header: Text(group.title).font(.caption).fontWeight(.semibold)) {
+                    ForEach(group.sessions) { session in
+                        SessionRowView(
+                            session: session,
+                            status: sessionStore.sessionStatuses[session.id],
+                            onTap: { navigateToChat = session.id },
+                            onRename: { newTitle in
+                                Task { await sessionStore.renameSession(session.id, newTitle: newTitle) }
+                            },
+                            onDelete: {
+                                sessionStore.deleteLocalSession(session.id)
+                            }
+                        )
+                        .listRowBackground(Color.clear)
+                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 100) // Tab 栏空间
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .refreshable {
             await sessionStore.fetchSessions()
         }
     }
 }
 
-// MARK: - 会话分组视图
+// MARK: - 会话行视图（用于 List）
+
+struct SessionRowView: View {
+    let session: Session
+    let status: SessionStatus?
+    let onTap: () -> Void
+    var onRename: ((String) -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
+
+    @State private var showRenameSheet = false
+    @State private var showDeleteConfirm = false
+    @State private var newTitle = ""
+    @EnvironmentObject var appState: AppState
+
+    // 随机颜色列表
+    private let mascotColors: [Color] = [
+        Color(hex: "E86B4A"),
+        Color(hex: "2ECC71"),
+        Color(hex: "9B59B6"),
+        Color(hex: "E67E22"),
+        Color(hex: "3498DB"),
+        Color(hex: "E91E63"),
+        Color(hex: "1ABC9C"),
+        Color(hex: "F39C12"),
+    ]
+
+    private var mascotColor: Color {
+        let hash = abs(session.id.hashValue)
+        return mascotColors[hash % mascotColors.count]
+    }
+
+    private var statusText: String? {
+        switch status {
+        case .thinking: return "思考中"
+        case .streaming: return "工作中"
+        case .toolExecuting: return "执行中"
+        case .permissionPending: return "等待权限"
+        case .questionPending: return "等待回答"
+        case .completed: return "已完成"
+        case .idle, .none: return nil
+        }
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case .thinking, .streaming, .toolExecuting: return .green
+        case .permissionPending, .questionPending: return .orange
+        case .completed: return .green
+        case .idle, .none: return .secondary
+        }
+    }
+
+    private var mascotStatus: MascotStatus {
+        switch status {
+        case .thinking, .streaming, .toolExecuting: return .processing
+        case .permissionPending, .questionPending: return .waitingApproval
+        case .completed: return .completed
+        case .idle, .none: return .idle
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 12) {
+                PixelMascot(size: 32, status: mascotStatus, bodyColor: mascotColor)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(session.title)
+                        .font(.headline)
+                        .foregroundColor(.adaptiveText)
+                        .lineLimit(1)
+
+                    if !session.projectPath.isEmpty {
+                        Text(session.projectPath)
+                            .font(.caption)
+                            .foregroundColor(.adaptiveTextSecondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer()
+
+                if let text = statusText {
+                    Text(text)
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(statusColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(statusColor.opacity(0.1))
+                        .cornerRadius(6)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.ultraThinMaterial)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if let onDelete = onDelete {
+                Button(role: .destructive) {
+                    showDeleteConfirm = true
+                } label: {
+                    Label("移除", systemImage: "trash")
+                }
+            }
+
+            if onRename != nil {
+                Button {
+                    newTitle = session.title
+                    showRenameSheet = true
+                } label: {
+                    Label("重命名", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
+        .alert("从本地移除对话？", isPresented: $showDeleteConfirm) {
+            Button("移除", role: .destructive) {
+                onDelete?()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("此操作只会从本机移除对话，不会删除服务器上的数据。你可以稍后通过导入会话重新导入。")
+        }
+        .sheet(isPresented: $showRenameSheet) {
+            RenameSheet(
+                title: $newTitle,
+                onConfirm: {
+                    if !newTitle.trimmingCharacters(in: .whitespaces).isEmpty {
+                        onRename?(newTitle.trimmingCharacters(in: .whitespaces))
+                    }
+                }
+            )
+        }
+        .listRowSeparator(.hidden)
+    }
+}
+
+// MARK: - 会话分组视图（保留兼容）
 
 struct SessionGroupView: View {
     let title: String
@@ -167,7 +319,10 @@ struct SessionGroupView: View {
                     SessionItemView(
                         session: session,
                         status: sessionStore.sessionStatuses[session.id],
-                        onTap: { onSelect(session) }
+                        onTap: { onSelect(session) },
+                        onRename: { newTitle in
+                            Task { await sessionStore.renameSession(session.id, newTitle: newTitle) }
+                        }
                     )
                     .liquidGlass(cornerRadius: 18, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
                 }
@@ -182,8 +337,11 @@ struct SessionItemView: View {
     let session: Session
     let status: SessionStatus?
     let onTap: () -> Void
+    var onRename: ((String) -> Void)? = nil
 
     @State private var showDeleteConfirm = false
+    @State private var showRenameSheet = false
+    @State private var newTitle = ""
 
     // 随机颜色列表 - 高饱和度
     private let mascotColors: [Color] = [
@@ -281,12 +439,32 @@ struct SessionItemView: View {
             } label: {
                 Label("删除", systemImage: "trash")
             }
+
+            if onRename != nil {
+                Button {
+                    newTitle = session.title
+                    showRenameSheet = true
+                } label: {
+                    Label("重命名", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
         }
         .confirmationDialog("确定删除此对话？", isPresented: $showDeleteConfirm) {
             Button("删除", role: .destructive) {
                 // onDelete
             }
             Button("取消", role: .cancel) {}
+        }
+        .sheet(isPresented: $showRenameSheet) {
+            RenameSheet(
+                title: $newTitle,
+                onConfirm: {
+                    if !newTitle.trimmingCharacters(in: .whitespaces).isEmpty {
+                        onRename?(newTitle.trimmingCharacters(in: .whitespaces))
+                    }
+                }
+            )
         }
     }
 
@@ -436,6 +614,42 @@ struct ContextRingView: View {
         if p < 75 { return .yellow }
         if p < 90 { return .orange }
         return .red
+    }
+}
+
+// MARK: - 重命名弹窗
+
+struct RenameSheet: View {
+    @Binding var title: String
+    let onConfirm: () -> Void
+    @Environment(\.dismiss) var dismiss
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("新标题") {
+                    TextField("输入新标题", text: $title)
+                        .focused($isFocused)
+                }
+            }
+            .navigationTitle("重命名对话")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("确定") {
+                        onConfirm()
+                        dismiss()
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        .onAppear { isFocused = true }
+        .presentationDetents([.height(200)])
     }
 }
 

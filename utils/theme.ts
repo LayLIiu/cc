@@ -42,12 +42,15 @@ export const colors = {
 
 /**
  * 根据 themeMode 解析出实际的 isDark 值
+ * glass 模式始终使用深色（深灰玻璃质感）
  */
 function resolveIsDark(mode: ThemeMode, systemScheme: string | null): boolean {
   switch (mode) {
     case 'light':
       return false
     case 'dark':
+      return true
+    case 'glass':
       return true
     case 'system':
     default:
@@ -57,15 +60,14 @@ function resolveIsDark(mode: ThemeMode, systemScheme: string | null): boolean {
 
 /**
  * 同步系统级别的 colorScheme（影响系统导航栏、状态栏等）
- * 仅在 mode 非 system 时调用
+ * glass 模式强制深色，确保原生 UI 也是深色调
  */
 function syncSystemAppearance(mode: ThemeMode) {
   if (mode === 'light') {
     Appearance.setColorScheme('light')
-  } else if (mode === 'dark') {
+  } else if (mode === 'dark' || mode === 'glass') {
     Appearance.setColorScheme('dark')
   } else {
-    // system 模式下恢复跟随系统
     Appearance.setColorScheme(null)
   }
 }
@@ -79,13 +81,15 @@ export function useTheme() {
   const effectiveMode = isHydrated ? themeMode : 'system'
   const isDark = resolveIsDark(effectiveMode, systemColorScheme)
 
-  // 同步系统级外观（需要在 React 渲染周期内调用）
-  // 使用同步方式确保导航栏等系统 UI 也跟随变化
+  // 同步系统级外观
   syncSystemAppearance(effectiveMode)
+
+  const isGlass = effectiveMode === 'glass'
 
   return {
     isDark,
     colors: isDark ? colors.dark : colors.light,
     themeMode: effectiveMode,
+    isGlass,
   }
 }

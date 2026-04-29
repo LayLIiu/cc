@@ -11,6 +11,12 @@ struct ProvidersView: View {
     @State private var selectedPreset: String?
     @State private var editingProvider: Provider?
 
+    // 网络信息
+    @State private var isLoadingNetwork = false
+    @State private var lanUrl: String = ""
+    @State private var tunnelUrl: String = ""
+    @State private var tunnelEnabled: Bool = false
+
     // 是否是浅色主题
     private var isLightTheme: Bool {
         appState.themeMode == .light
@@ -106,24 +112,30 @@ struct ProvidersView: View {
                 .foregroundColor(.secondary)
 
             VStack(spacing: 8) {
-                // 配对码
+                // 获取网络地址按钮
                 Button {
-                    // 生成配对码
+                    fetchNetworkInfo()
                 } label: {
                     HStack {
                         VStack(alignment: .leading) {
-                            Text("配对码")
+                            Text("获取网络地址")
                                 .font(.subheadline)
-                            Text("生成配对码连接桌面端")
+                            Text("从桌面端获取局域网和公网地址")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
                         Spacer()
-                        Text("生成")
-                            .font(.caption)
-                            .foregroundColor(.adaptivePrimary)
+                        if isLoadingNetwork {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption)
+                                .foregroundColor(.adaptivePrimary)
+                        }
                     }
                 }
+                .disabled(isLoadingNetwork)
                 .padding(12)
                 .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
 
@@ -132,11 +144,20 @@ struct ProvidersView: View {
                     VStack(alignment: .leading) {
                         Text("局域网地址")
                             .font(.subheadline)
-                        Text(authStore.lanUrl.isEmpty ? "未设置" : authStore.lanUrl)
+                        Text(lanUrl.isEmpty ? "点击上方按钮获取" : lanUrl)
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
                     Spacer()
+                    if !lanUrl.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = lanUrl
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption)
+                                .foregroundColor(.adaptivePrimary)
+                        }
+                    }
                 }
                 .padding(12)
                 .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
@@ -146,17 +167,49 @@ struct ProvidersView: View {
                     VStack(alignment: .leading) {
                         Text("公网隧道")
                             .font(.subheadline)
-                        Text("未开启")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        if tunnelEnabled {
+                            Text(tunnelUrl.isEmpty ? "已开启" : tunnelUrl)
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        } else {
+                            Text("未开启")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     Spacer()
-
-                    Toggle("", isOn: .constant(false))
-                        .labelsHidden()
+                    if tunnelEnabled && !tunnelUrl.isEmpty {
+                        Button {
+                            UIPasteboard.general.string = tunnelUrl
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption)
+                                .foregroundColor(.adaptivePrimary)
+                        }
+                    }
                 }
                 .padding(12)
                 .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+            }
+        }
+    }
+
+    private func fetchNetworkInfo() {
+        isLoadingNetwork = true
+        Task {
+            do {
+                let info = try await APIService.shared.getNetworkInfo()
+                await MainActor.run {
+                    lanUrl = info.lanUrl ?? ""
+                    tunnelUrl = info.tunnelUrl ?? ""
+                    tunnelEnabled = info.tunnelEnabled
+                    isLoadingNetwork = false
+                }
+            } catch {
+                await MainActor.run {
+                    isLoadingNetwork = false
+                    print("[ProvidersView] Failed to fetch network info: \(error)")
+                }
             }
         }
     }

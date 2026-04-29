@@ -36,9 +36,10 @@ class WebSocketService: NSObject, ObservableObject {
     // 全局连接管理
     private var urlSession: URLSession!
     private var serverUrl: String = ""
-    private var subscribedSessions: Set<String> = []
+    var subscribedSessions: Set<String> = []  // 改为公开，供外部检查
     private var reconnectTimers: [String: Timer] = [:]
     private var cleanupTimer: Timer?
+    private var heartbeatTimer: Timer?  // 心跳检测定时器
 
     enum ConnectionStatus {
         case connecting
@@ -56,6 +57,30 @@ class WebSocketService: NSObject, ObservableObject {
         // 定期清理空闲连接
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.cleanupIdleConnections()
+        }
+
+        // 心跳检测：每 30 秒检查一次连接状态
+        heartbeatTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.checkAndReconnectBrokenConnections()
+        }
+    }
+
+    /// 检查并重连断开的连接
+    private func checkAndReconnectBrokenConnections() {
+        guard !serverUrl.isEmpty else { return }
+
+        for sessionId in subscribedSessions {
+            if let conn = globalConnections[sessionId] {
+                // 如果连接状态是 disconnected 或 error，尝试重连
+                if conn.status == .disconnected || conn.status == .error || conn.task == nil {
+                    print("[GlobalWS] 💓 Heartbeat: reconnecting broken connection for \(sessionId)")
+                    connectGlobal(sessionId: sessionId)
+                }
+            } else {
+                // 如果连接不存在，创建新连接
+                print("[GlobalWS] 💓 Heartbeat: creating missing connection for \(sessionId)")
+                connectGlobal(sessionId: sessionId)
+            }
         }
     }
 
@@ -284,6 +309,23 @@ class WebSocketService: NSObject, ObservableObject {
     /// 检查是否已订阅全局
     var isGlobalSubscribed: Bool {
         return !subscribedSessions.isEmpty
+    }
+
+    /// 检查指定会话的连接状态
+    func isSessionConnected(_ sessionId: String) -> Bool {
+        guard let conn = globalConnections[sessionId] else { return false }
+        return conn.status == .connected && conn.task != nil
+    }
+
+    /// 确保会话已连接（如果未连接则尝试连接）
+    func ensureSessionConnected(serverUrl: String, sessionId: String) {
+        if !isSessionConnected(sessionId) {
+            print("[GlobalWS] ⚠️ Session \(sessionId) not connected, reconnecting...")
+            if !subscribedSessions.contains(sessionId) {
+                subscribedSessions.insert(sessionId)
+            }
+            connectGlobal(sessionId: sessionId)
+        }
     }
 
     private func connectGlobal(sessionId: String) {
