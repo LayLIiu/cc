@@ -135,7 +135,7 @@ extension Color {
 
 // MARK: - 玻璃卡片修饰器
 
-/// iOS 26 原生液态玻璃效果（仅深色模式使用）
+/// iOS 26 原生液态玻璃效果（带虹彩色散边框）
 @available(iOS 26.0, *)
 struct LiquidGlassModifier: ViewModifier {
     var cornerRadius: CGFloat
@@ -146,7 +146,25 @@ struct LiquidGlassModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            // iOS 26 原生液态玻璃渲染
             .glassEffect(.regular)
+            // 边缘渐变描边，模拟虹彩色散
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.2),
+                                Color.cyan.opacity(0.15),
+                                Color.blue.opacity(0.12),
+                                Color.purple.opacity(0.15)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     }
 }
@@ -233,9 +251,13 @@ extension View {
         if #available(iOS 26.0, *) {
             modifier(LiquidGlassModifier(cornerRadius: cornerRadius))
         } else {
-            // 旧版本：使用材质效果
+            // 旧版本：使用深色材质效果，更接近液态玻璃质感
             self
                 .background(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                )
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
     }
@@ -309,8 +331,17 @@ struct LiquidGlassTabBar: View {
                     .contentShape(Rectangle())  // 扩大点击区域到整个 tab 格子
                     .background {
                         if selectedTab == tab.id {
+                            // 液态玻璃胶囊指示器 - 半透明玻璃材质
                             Capsule()
-                                .fill(Color.adaptivePrimary)
+                                .fill(.ultraThinMaterial)
+                                .overlay(
+                                    Capsule()
+                                        .fill(Color.adaptivePrimary.opacity(0.6))
+                                )
+                                .overlay(
+                                    Capsule()
+                                        .stroke(Color.white.opacity(0.2), lineWidth: 0.8)
+                                )
                                 .matchedGeometryEffect(id: "tab", in: animation)
                         }
                     }
