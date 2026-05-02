@@ -4,6 +4,13 @@
 import ActivityKit
 import Foundation
 
+/// 会话摘要（用于锁屏显示多个会话）
+struct SessionSummary: Codable, Hashable {
+    var title: String
+    var content: String
+    var type: ActivityType
+}
+
 /// Claude Code 工作状态灵动岛属性
 struct ClaudeActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
@@ -11,16 +18,24 @@ struct ClaudeActivityAttributes: ActivityAttributes {
         var status: ClaudeWorkStatus
         /// 状态文字
         var statusText: String
-        /// 最后一条消息摘要
-        var lastMessage: String
+        /// 工具名称（如 Bash, Edit, Read 等）
+        var toolName: String
+        /// 当前活动内容（描述）
+        var activityContent: String
+        /// 活动内容类型
+        var activityType: ActivityType
         /// 会话标题
         var sessionTitle: String
         /// 已用时间（秒）
         var elapsedSeconds: Int
-        /// 已完成任务数
-        var completedTasks: Int
-        /// 总任务数
-        var totalTasks: Int
+        /// 正在工作的会话数
+        var activeSessions: Int
+        /// 总会话数
+        var totalSessions: Int
+        /// 动画时间戳
+        var animationTimestamp: Double
+        /// 多会话摘要列表（用于锁屏显示）
+        var sessionSummaries: [SessionSummary]
     }
 
     /// 会话 ID
@@ -29,11 +44,20 @@ struct ClaudeActivityAttributes: ActivityAttributes {
     var mascotColorHex: String
 }
 
-/// 工作状态枚举（简化版：只有三个状态）
+/// 活动内容类型
+enum ActivityType: String, Codable {
+    case thinking    // 思考中
+    case toolUse     // 工具调用
+    case streaming   // 生成回复
+    case completed   // 已完成
+    case idle        // 空闲
+}
+
+/// 工作状态枚举
 enum ClaudeWorkStatus: String, Codable {
-    case idle = "idle"           // 休闲中
-    case working = "working"     // 工作中
-    case completed = "completed" // 已完成
+    case idle = "idle"
+    case working = "working"
+    case completed = "completed"
 
     var displayText: String {
         switch self {

@@ -56,6 +56,11 @@ struct ChatView: View {
         sessionStore.messages[sessionId] ?? []
     }
 
+    /// 当前会话的权限模式
+    var currentPermissionMode: PermissionMode {
+        sessionStore.sessionPermissionModes[sessionId] ?? .default
+    }
+
     // 分页后的消息（只显示最近 N 条）- 缓存优化
     @State private var cachedVisibleMessages: [Message] = []
     @State private var lastMessagesCount = 0
@@ -105,18 +110,6 @@ struct ChatView: View {
         return result
     }
 
-    // 缓存倒序消息，避免每次访问都创建新数组
-    @State private var cachedReversedMessages: [Message] = []
-
-    private var reversedMessages: [Message] {
-        let current = allMessages
-        // 简单比较引用或数量，避免不必要的反转
-        if cachedReversedMessages.count != current.count {
-            cachedReversedMessages = current.reversed()
-        }
-        return cachedReversedMessages
-    }
-
     var body: some View {
         ZStack {
             // 背景
@@ -153,12 +146,14 @@ struct ChatView: View {
                             .padding(.vertical, 6)
                             .background(.ultraThinMaterial)
                             .clipShape(Capsule())
-                            .clipShape(Capsule())
                         }
                         .padding(.bottom, 8)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
+
+                // 任务面板
+                SessionTaskBarView()
 
                 // 输入区域
                 chatInput
@@ -191,15 +186,50 @@ struct ChatView: View {
             // 测试按钮（仅调试模式）
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
-                    Button("模拟权限请求") {
-                        sessionStore.simulatePermissionRequest()
+                    Section("权限模式") {
+                        ForEach(PermissionMode.allCases, id: \.self) { mode in
+                            Button {
+                                sessionStore.changePermissionMode(mode)
+                            } label: {
+                                HStack {
+                                    // 小圆点指示当前选中
+                                    Circle()
+                                        .fill(mode.color)
+                                        .frame(width: 8, height: 8)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(mode.displayName)
+                                            .font(.subheadline)
+                                        Text(mode.description)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    // 当前选中的模式显示勾选标记
+                                    if sessionStore.sessionPermissionModes[sessionId] == mode ||
+                                        (sessionStore.sessionPermissionModes[sessionId] == nil && mode == .default) {
+                                        Image(systemName: "checkmark")
+                                            .foregroundColor(mode.color)
+                                    }
+                                }
+                            }
+                        }
                     }
-                    Button("模拟问题") {
-                        sessionStore.simulateQuestion()
+
+                    // 保留测试功能（调试用）
+                    Section("测试功能") {
+                        Button("模拟权限请求") {
+                            sessionStore.simulatePermissionRequest()
+                        }
+                        Button("模拟问题") {
+                            sessionStore.simulateQuestion()
+                        }
+                        Button("模拟任务列表") {
+                            sessionStore.simulateTaskList()
+                        }
                     }
                 } label: {
                     Image(systemName: "ladybug.fill")
-                        .foregroundColor(.orange)
+                        .foregroundColor(currentPermissionMode.color)
                 }
             }
         }
@@ -211,24 +241,28 @@ struct ChatView: View {
             // 更新会话的最后修改时间（让会话移动到"今天"分组）
             sessionStore.touchSession(sessionId)
 
+            // 🔥 先同步加载本地缓存（如果有），确保 UI 立即显示
+            if sessionStore.messages[sessionId] == nil || sessionStore.messages[sessionId]?.isEmpty == true {
+                if let localMessages = sessionStore.loadMessagesFromLocal(sessionId) {
+                    sessionStore.messages[sessionId] = localMessages
+                    print("[ChatView] 📦 Loaded \(localMessages.count) messages from local cache")
+                }
+            }
+
             // 初始化分页状态和缓存
             updatePaginationState()
             updateVisibleMessagesCache()
 
             // 🔥 确保 WebSocket 已订阅该会话
             let serverUrl = authStore.serverUrl
-            print("[ChatView] 🔧 Server URL: \(serverUrl)")
-            print("[ChatView] 🔧 Is global subscribed: \(sessionStore.webSocketService.isGlobalSubscribed)")
-            print("[ChatView] 🔧 Subscribed sessions: \(sessionStore.webSocketService.subscribedSessions)")
-            print("[ChatView] 🔧 Global connections: \(sessionStore.webSocketService.globalConnections.keys)")
-
             if !serverUrl.isEmpty {
-                // 始终尝试订阅当前会话，确保不会遗漏
                 sessionStore.subscribeToSession(serverUrl: serverUrl, sessionId: sessionId)
             }
 
-            // 先从服务端拉取最新消息（可能桌面端已产生新消息）
-            await fetchLatestMessages()
+            // 🚀 后台静默同步消息，不阻塞 UI
+            Task {
+                await fetchLatestMessages()
+            }
 
             // 更新状态
             if let status = sessionStore.sessionStatuses[sessionId] {
@@ -252,6 +286,7 @@ struct ChatView: View {
             // 更新分页状态和缓存
             updatePaginationState()
             updateVisibleMessagesCache()
+            // 缓存已通过 updateVisibleMessagesCache 更新
             if newValue > oldValue && !userIsViewingHistory {
                 // 新消息到达，只有在用户没有在查看历史时才滚动
                 scrollToBottomTrigger.toggle()
@@ -510,7 +545,10 @@ struct ChatView: View {
     private func handleStreamingMessage(_ msg: WSMessage) {
         switch msg.type {
         case .contentStart:
-            // 开始新的文本块
+            // 开始新的文本块 - 确保灵动岛已启动
+            let sessionTitle = session?.title ?? "对话"
+            LiveActivityService.shared.sessionStartedWorking(sessionId: sessionId, sessionTitle: sessionTitle)
+
             if chatStatus == .idle || chatStatus == .completed {
                 chatStatus = .streaming
             }
@@ -526,12 +564,16 @@ struct ChatView: View {
             }
             if let text = msg.text {
                 streamingText += text
-                // 流式消息时不频繁触发滚动，避免打断用户
-                // 滚动会在 messageComplete 时统一处理
+                // 🎯 更新灵动岛显示完整内容
+                LiveActivityService.shared.updateStreamingContent(streamingText, sessionId: sessionId)
             }
 
         case .thinking:
             // 思考内容追加到本地 state
+            // 确保灵动岛已启动
+            let sessionTitle = session?.title ?? "对话"
+            LiveActivityService.shared.sessionStartedWorking(sessionId: sessionId, sessionTitle: sessionTitle)
+
             if chatStatus == .idle || chatStatus == .completed {
                 chatStatus = .thinking
             }
@@ -541,6 +583,8 @@ struct ChatView: View {
             }
             if let text = msg.text {
                 streamingThinking += text
+                // 🎯 更新灵动岛显示完整思考内容
+                LiveActivityService.shared.updateThinkingContent(streamingThinking, sessionId: sessionId)
             }
 
         case .toolUseComplete:
@@ -561,6 +605,29 @@ struct ChatView: View {
                     toolStatus: .running
                 )
                 sessionStore.addMessage(sessionId, toolMsg)
+
+                // 🎯 更新灵动岛显示工具调用（完整内容）
+                let sessionTitle = session?.title ?? "对话"
+                LiveActivityService.shared.sessionStartedWorking(sessionId: sessionId, sessionTitle: sessionTitle)
+
+                // 提取工具输入的完整描述
+                var inputDesc: String? = nil
+                if let input = msg.input {
+                    // 优先使用 description 字段
+                    if let desc = input["description"]?.value as? String, !desc.isEmpty {
+                        inputDesc = desc
+                    } else if let filePath = input["file_path"]?.value as? String {
+                        inputDesc = filePath
+                    } else if let command = input["command"]?.value as? String {
+                        inputDesc = command
+                    } else if let pattern = input["pattern"]?.value as? String {
+                        inputDesc = pattern
+                    }
+                }
+                LiveActivityService.shared.updateToolUse(toolName: toolName, toolInput: inputDesc, sessionId: sessionId)
+
+                // 拦截任务工具调用，更新任务面板
+                sessionStore.handleTaskToolCallPublic(sessionId, toolName: toolName, input: msg.input)
             }
             chatStatus = .toolExecuting
 
@@ -613,7 +680,7 @@ struct ChatView: View {
             flushStreamingBuffers()
             chatStatus = .permissionPending
 
-        case .question:
+        case .question, .questions:
             flushStreamingBuffers()
             chatStatus = .questionPending
 
@@ -693,6 +760,7 @@ struct ChatView: View {
             sessionStore.addMessage(sessionId, thinkMsg)
             streamingThinking = ""
         }
+        // 缓存已通过 updateVisibleMessagesCache 更新
     }
 
     private func sendMessage() {
@@ -724,6 +792,7 @@ struct ChatView: View {
         streamingThinking = ""
         inTextBlock = false
         inThinkingBlock = false
+        // 缓存已通过 updateVisibleMessagesCache 更新
         chatStatus = .thinking
     }
 }
@@ -743,6 +812,12 @@ struct MessageBubbleView: View {
     @State private var showCustomInput = false
     @State private var customInputText = ""
     @FocusState private var isInputFocused: Bool
+
+    // 本地状态：问题/权限是否已处理（解决 SwiftUI 不刷新问题）
+    @State private var localIsQuestionAnswered = false
+    @State private var localSelectedAnswer: String?
+    @State private var localIsPermissionHandled = false
+    @State private var localPermissionResult: Bool?
 
     // 复制功能状态
     @State private var showCopyButton = false
@@ -794,7 +869,7 @@ struct MessageBubbleView: View {
                     case .question:
                         questionBubble
                     case .taskList:
-                        taskListBubble
+                        EmptyView()  // 任务列表已移至底部悬浮面板
                     }
                 }
 
@@ -863,8 +938,7 @@ struct MessageBubbleView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
-                    .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .background(Color.secondary.opacity(0.15))
                     .clipShape(Capsule())
                 }
             }
@@ -896,7 +970,7 @@ struct MessageBubbleView: View {
         Text(message.content)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial)
+            .background(Color.secondary.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 18))
     }
 
@@ -909,7 +983,7 @@ struct MessageBubbleView: View {
                 MarkdownRenderer(content: message.content)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .background(.ultraThinMaterial)
+                    .background(Color.secondary.opacity(0.08))
                     .clipShape(RoundedRectangle(cornerRadius: 18))
             }
         }
@@ -968,8 +1042,7 @@ struct MessageBubbleView: View {
                     MarkdownRenderer(content: result)
                 }
                 .padding(12)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+                .background(Color.secondary.opacity(0.08))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 EmptyView()
@@ -1023,10 +1096,10 @@ struct MessageBubbleView: View {
                     .foregroundColor(.adaptiveTextSecondary)
             }
 
-            // 已处理的结果
-            if message.isPermissionHandled {
+            // 已处理的结果（优先使用本地状态，解决 SwiftUI 刷新问题）
+            if localIsPermissionHandled || message.isPermissionHandled {
                 HStack {
-                    if message.permissionResult == true {
+                    if localPermissionResult ?? message.permissionResult == true {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
                         Text("已允许")
@@ -1072,8 +1145,7 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+        .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
@@ -1097,12 +1169,12 @@ struct MessageBubbleView: View {
                 .font(.subheadline)
                 .foregroundColor(.adaptiveTextSecondary)
 
-            // 已回答的结果
-            if message.isQuestionAnswered {
+            // 已回答的结果（优先使用本地状态，解决 SwiftUI 刷新问题）
+            if localIsQuestionAnswered || message.isQuestionAnswered {
                 HStack {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
-                    Text(message.selectedAnswer ?? "")
+                    Text(localSelectedAnswer ?? message.selectedAnswer ?? "")
                         .font(.subheadline)
                         .foregroundColor(.green)
                 }
@@ -1192,110 +1264,19 @@ struct MessageBubbleView: View {
             }
         }
         .padding(16)
-        .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-
-    // MARK: - 任务列表气泡
-
-    private var taskListBubble: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // 标题
-            HStack {
-                Image(systemName: "checklist")
-                    .font(.title3)
-                    .foregroundColor(.blue)
-                Text("任务计划")
-                    .font(.headline)
-                    .foregroundColor(.adaptiveText)
-                Spacer()
-
-                // 进度指示
-                if let tasks = message.tasks {
-                    let completed = tasks.filter { $0.status == .completed }.count
-                    let total = tasks.count
-                    Text("\(completed)/\(total)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.1))
-                        .cornerRadius(6)
-                }
-            }
-
-            // 任务列表
-            if let tasks = message.tasks {
-                VStack(spacing: 8) {
-                    ForEach(tasks) { task in
-                        HStack(spacing: 12) {
-                            // 状态图标
-                            ZStack {
-                                if task.status == .inProgress {
-                                    ProgressView()
-                                        .scaleEffect(0.6)
-                                        .frame(width: 20, height: 20)
-                                } else {
-                                    Image(systemName: task.icon)
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundColor(task.color)
-                                }
-                            }
-                            .frame(width: 24, height: 24)
-
-                            // 任务内容
-                            Text(task.content)
-                                .font(.subheadline)
-                                .foregroundColor(task.status == .completed ? .secondary : .adaptiveText)
-                                .strikethrough(task.status == .completed)
-
-                            Spacer()
-                        }
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(task.status == .inProgress ? Color.blue.opacity(0.08) : Color.clear)
-                        )
-                    }
-                }
-
-                // 进度条
-                let completed = tasks.filter { $0.status == .completed }.count
-                let total = tasks.count
-                let progress = total > 0 ? Double(completed) / Double(total) : 0
-
-                VStack(spacing: 4) {
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.secondary.opacity(0.2))
-                                .frame(height: 6)
-
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.blue)
-                                .frame(width: geometry.size.width * progress, height: 6)
-                        }
-                    }
-                    .frame(height: 6)
-
-                    Text("已完成 \(completed) / \(total) 项任务")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                }
-            }
-        }
-        .padding(16)
-        .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 18))
+        .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
     // MARK: - 操作处理
 
     private func handlePermission(allow: Bool) {
+        // 立即更新本地状态（解决 UI 不刷新问题）
+        withAnimation {
+            localIsPermissionHandled = true
+            localPermissionResult = allow
+        }
+
         // 发送权限响应到 WebSocket
         if let permissionId = message.permissionId {
             sessionStore.sendPermissionResponse(requestId: permissionId, allowed: allow)
@@ -1307,6 +1288,8 @@ struct MessageBubbleView: View {
             updatedMessage.isPermissionHandled = true
             updatedMessage.permissionResult = allow
             sessionStore.messages[sessionId]?[index] = updatedMessage
+            // 触发 UI 刷新
+            sessionStore.notifyChanged()
         }
         // 恢复状态
         sessionStore.sessionStatuses[sessionId] = .idle
@@ -1314,17 +1297,29 @@ struct MessageBubbleView: View {
     }
 
     private func handleQuestionAnswer(_ answer: String) {
+        print("[ChatView] 📝 Question answered: \(answer), questionId: \(message.questionId ?? "nil")")
+
+        // 立即更新本地状态（解决 UI 不刷新问题）
+        withAnimation {
+            localIsQuestionAnswered = true
+            localSelectedAnswer = answer
+        }
+
         // 发送问题响应到 WebSocket
         if let questionId = message.questionId {
+            print("[ChatView] 📤 Sending question response...")
             sessionStore.sendQuestionResponse(questionId: questionId, answer: answer)
         }
 
         // 更新消息状态
         if let index = sessionStore.messages[sessionId]?.firstIndex(where: { $0.id == message.id }) {
+            print("[ChatView] ✅ Updating message at index \(index)")
             var updatedMessage = message
             updatedMessage.isQuestionAnswered = true
             updatedMessage.selectedAnswer = answer
             sessionStore.messages[sessionId]?[index] = updatedMessage
+            // 触发 UI 刷新
+            sessionStore.notifyChanged()
         }
         // 恢复状态
         sessionStore.sessionStatuses[sessionId] = .idle
@@ -1650,6 +1645,220 @@ extension QuestionRequest: Identifiable {
 }
 
 // MARK: - 滚动偏移 PreferenceKey
+
+// MARK: - 底部悬浮任务面板
+
+struct SessionTaskBarView: View {
+    @EnvironmentObject var sessionStore: SessionStore
+    @EnvironmentObject var appState: AppState
+
+    private var tasks: [TaskItem] {
+        sessionStore.getCurrentTasks()
+    }
+
+    private var allCompleted: Bool {
+        !tasks.isEmpty && tasks.allSatisfy { $0.status == .completed }
+    }
+
+    private var completedCount: Int {
+        tasks.filter { $0.status == .completed }.count
+    }
+
+    private var totalCount: Int {
+        tasks.count
+    }
+
+    private var progressPercent: Double {
+        totalCount > 0 ? Double(completedCount) / Double(totalCount) : 0
+    }
+
+    var body: some View {
+        // 无任务或用户已关闭时隐藏
+        if !tasks.isEmpty && !sessionStore.taskBarDismissed {
+            VStack(spacing: 0) {
+                // 分隔线
+                Divider()
+                    .opacity(0.3)
+
+                // 主体
+                VStack(spacing: 0) {
+                    // 标题栏 - 始终可见，点击展开/收起
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            sessionStore.toggleTaskBarExpanded()
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            // 图标
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.adaptivePrimary.opacity(0.1))
+                                    .frame(width: 26, height: 26)
+                                Image(systemName: "checklist")
+                                    .font(.system(size: 13))
+                                    .foregroundColor(.adaptivePrimary)
+                            }
+
+                            // 标题
+                            Text("任务")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.adaptiveText)
+
+                            // 进度条
+                            GeometryReader { geometry in
+                                ZStack(alignment: .leading) {
+                                    Capsule()
+                                        .fill(Color.secondary.opacity(0.2))
+                                    Capsule()
+                                        .fill(allCompleted ? Color.green : Color.adaptivePrimary)
+                                        .frame(width: max(geometry.size.width * progressPercent, progressPercent > 0 ? 4 : 0))
+                                }
+                            }
+                            .frame(height: 4)
+                            .frame(maxWidth: 160)
+
+                            // 计数
+                            Text("\(completedCount)/\(totalCount)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.secondary)
+
+                            Spacer()
+
+                            // 展开箭头
+                            Image(systemName: "chevron.up")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.secondary)
+                                .rotationEffect(.degrees(sessionStore.taskBarExpanded ? 0 : 180))
+
+                            // 全部完成时显示关闭按钮
+                            if allCompleted {
+                                Button {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                        sessionStore.dismissTaskBar()
+                                    }
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 10, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 20, height: 20)
+                                        .background(Color.secondary.opacity(0.1))
+                                        .clipShape(Circle())
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    // 展开的任务列表
+                    if sessionStore.taskBarExpanded {
+                        VStack(spacing: 0) {
+                            Divider()
+                                .opacity(0.2)
+
+                            ScrollView(.vertical, showsIndicators: false) {
+                                LazyVStack(spacing: 2) {
+                                    ForEach(tasks) { task in
+                                        TaskItemRow(task: task)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                            }
+                            .frame(maxHeight: 200)
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+            }
+            .background(.ultraThinMaterial)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
+// MARK: - 任务项行
+
+struct TaskItemRow: View {
+    let task: TaskItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            // 状态图标
+            ZStack {
+                if task.status == .inProgress {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 16, height: 16)
+                } else {
+                    Image(systemName: task.icon)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(task.color)
+                }
+            }
+            .frame(width: 16, height: 16)
+            .padding(.top, 1)
+
+            // 内容区
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("#\(task.id)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Text(task.content)
+                        .font(.system(size: 12))
+                        .foregroundColor(task.status == .completed ? .secondary : .adaptiveText)
+                        .strikethrough(task.status == .completed, color: .secondary)
+                }
+
+                // 进行中显示 activeForm
+                if task.status == .inProgress, let activeForm = task.activeForm {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 5, height: 5)
+                            .modifier(PulseEffect())
+                        Text(activeForm)
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                    }
+                }
+
+                // 负责人
+                if let owner = task.owner {
+                    HStack(spacing: 3) {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 8))
+                        Text(owner)
+                            .font(.system(size: 10))
+                    }
+                    .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(task.status == .inProgress ? Color.blue.opacity(0.06) : Color.clear)
+        )
+    }
+}
+
+// MARK: - 脉冲动画修饰符
+
+struct PulseEffect: ViewModifier {
+    @State private var isPulsing = false
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isPulsing ? 0.4 : 1.0)
+            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: isPulsing)
+            .onAppear { isPulsing = true }
+    }
+}
 
 #Preview {
     NavigationStack {

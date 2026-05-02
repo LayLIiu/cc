@@ -248,7 +248,7 @@ struct SessionRowView: View {
             .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 18)
-                    .fill(.ultraThinMaterial)
+                    .fill(Color.secondary.opacity(0.08))
             )
             .clipShape(RoundedRectangle(cornerRadius: 18))
         }

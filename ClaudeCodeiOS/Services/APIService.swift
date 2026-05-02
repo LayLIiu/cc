@@ -161,7 +161,7 @@ class APIService {
                 continue
             }
         }
-        return NetworkInfo(lanUrl: nil, tunnelUrl: nil, tunnelEnabled: false, serverPort: 0)
+        return NetworkInfo(recommendedType: nil, lanUrl: nil, tailscaleUrl: nil, tunnelUrl: nil, tunnelEnabled: false, serverPort: 0)
     }
 
     func getPairingCode() async throws -> PairingCodeResponse {
@@ -360,6 +360,13 @@ class APIService {
         }
     }
 
+    // MARK: - 公共请求方法
+
+    /// 公共 GET 请求（供外部模块使用）
+    func request(_ path: String) async throws -> Data {
+        return try await request(path, method: "GET")
+    }
+
     // MARK: - 私有方法
 
     private func request<T: Encodable>(
@@ -498,10 +505,49 @@ struct RawMessage: Codable {
 
 // 网络信息
 struct NetworkInfo: Codable {
+    /** 最优连接类型: lan | tailscale | tunnel | none */
+    let recommendedType: String?
+    /** LAN 直连地址 */
     let lanUrl: String?
+    /** Tailscale 地址 */
+    let tailscaleUrl: String?
+    /** Cloudflare Tunnel 地址 */
     let tunnelUrl: String?
     let tunnelEnabled: Bool
     let serverPort: Int
+
+    /** 获取最优连接 URL */
+    func getBestUrl() -> String? {
+        // 优先使用服务器推荐
+        if let recommended = recommendedType {
+            switch recommended {
+            case "lan":
+                return lanUrl
+            case "tailscale":
+                return tailscaleUrl
+            case "tunnel":
+                return tunnelUrl
+            default:
+                break
+            }
+        }
+        // 兼容旧逻辑
+        return lanUrl ?? tunnelUrl
+    }
+
+    /** 连接类型显示名称 */
+    func getConnectionTypeName() -> String {
+        switch recommendedType {
+        case "lan":
+            return "局域网直连"
+        case "tailscale":
+            return "Tailscale"
+        case "tunnel":
+            return "Cloudflare 隧道"
+        default:
+            return "未知"
+        }
+    }
 }
 
 // 配对码响应

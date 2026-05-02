@@ -35,5 +35,8 @@ struct ClaudeCodeApp: App {
         if !authorizationInfo.areActivitiesEnabled {
             print("[LiveActivity] ⚠️ Live Activities not enabled. Please enable in Settings.")
         }
+
+        // 启动灵动岛（一直保持显示）
+        LiveActivityService.shared.startActivityIfIdle()
     }
 }

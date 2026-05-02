@@ -13,9 +13,12 @@ struct ProvidersView: View {
 
     // 网络信息
     @State private var isLoadingNetwork = false
+    @State private var networkInfo: NetworkInfo?
     @State private var lanUrl: String = ""
+    @State private var tailscaleUrl: String = ""
     @State private var tunnelUrl: String = ""
     @State private var tunnelEnabled: Bool = false
+    @State private var recommendedType: String = ""
 
     // 是否是浅色主题
     private var isLightTheme: Bool {
@@ -139,17 +142,57 @@ struct ProvidersView: View {
                 .padding(12)
                 .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
 
-                // 局域网地址
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("局域网地址")
-                            .font(.subheadline)
-                        Text(lanUrl.isEmpty ? "点击上方按钮获取" : lanUrl)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                // 当前最优连接
+                if let info = networkInfo, let bestUrl = info.getBestUrl(), !bestUrl.isEmpty {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            HStack(spacing: 6) {
+                                Image(systemName: connectionIcon)
+                                    .font(.caption)
+                                    .foregroundColor(connectionColor)
+                                Text("最优连接")
+                                    .font(.subheadline)
+                                Text(info.getConnectionTypeName())
+                                    .font(.caption)
+                                    .foregroundColor(connectionColor)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(connectionColor.opacity(0.15))
+                                    .cornerRadius(4)
+                            }
+                            Text(bestUrl)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            UIPasteboard.general.string = bestUrl
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption)
+                                .foregroundColor(.adaptivePrimary)
+                        }
                     }
-                    Spacer()
-                    if !lanUrl.isEmpty {
+                    .padding(12)
+                    .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+                }
+
+                // 局域网地址
+                if !lanUrl.isEmpty {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "wifi")
+                                    .font(.caption)
+                                    .foregroundColor(.green)
+                                Text("局域网地址")
+                                    .font(.subheadline)
+                            }
+                            Text(lanUrl)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
                         Button {
                             UIPasteboard.general.string = lanUrl
                         } label: {
@@ -158,15 +201,48 @@ struct ProvidersView: View {
                                 .foregroundColor(.adaptivePrimary)
                         }
                     }
+                    .padding(12)
+                    .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
                 }
-                .padding(12)
-                .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+
+                // Tailscale 地址
+                if !tailscaleUrl.isEmpty {
+                    HStack {
+                        VStack(alignment: .leading) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "network")
+                                    .font(.caption)
+                                    .foregroundColor(.blue)
+                                Text("Tailscale")
+                                    .font(.subheadline)
+                            }
+                            Text(tailscaleUrl)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            UIPasteboard.general.string = tailscaleUrl
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .font(.caption)
+                                .foregroundColor(.adaptivePrimary)
+                        }
+                    }
+                    .padding(12)
+                    .liquidGlass(cornerRadius: 8, isDark: appState.themeMode == .dark || appState.themeMode == .glass)
+                }
 
                 // 公网隧道
                 HStack {
                     VStack(alignment: .leading) {
-                        Text("公网隧道")
-                            .font(.subheadline)
+                        HStack(spacing: 4) {
+                            Image(systemName: "globe")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                            Text("公网隧道")
+                                .font(.subheadline)
+                        }
                         if tunnelEnabled {
                             Text(tunnelUrl.isEmpty ? "已开启" : tunnelUrl)
                                 .font(.caption)
@@ -194,15 +270,36 @@ struct ProvidersView: View {
         }
     }
 
+    private var connectionIcon: String {
+        switch recommendedType {
+        case "lan": return "wifi"
+        case "tailscale": return "network"
+        case "tunnel": return "globe"
+        default: return "questionmark.circle"
+        }
+    }
+
+    private var connectionColor: Color {
+        switch recommendedType {
+        case "lan": return .green
+        case "tailscale": return .blue
+        case "tunnel": return .orange
+        default: return .secondary
+        }
+    }
+
     private func fetchNetworkInfo() {
         isLoadingNetwork = true
         Task {
             do {
                 let info = try await APIService.shared.getNetworkInfo()
                 await MainActor.run {
+                    networkInfo = info
                     lanUrl = info.lanUrl ?? ""
+                    tailscaleUrl = info.tailscaleUrl ?? ""
                     tunnelUrl = info.tunnelUrl ?? ""
                     tunnelEnabled = info.tunnelEnabled
+                    recommendedType = info.recommendedType ?? ""
                     isLoadingNetwork = false
                 }
             } catch {

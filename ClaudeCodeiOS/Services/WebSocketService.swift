@@ -267,7 +267,8 @@ class WebSocketService: NSObject, ObservableObject {
         // 只要 task 存在就尝试发送，不要求必须是 .connected 状态
         // 因为 task 已经 resume 后就可以发送了
         let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
+        // 不使用 snake_case，保持驼峰命名（与 RN 端一致）
+        // encoder.keyEncodingStrategy = .convertToSnakeCase
 
         guard let data = try? encoder.encode(message),
               let jsonString = String(data: data, encoding: .utf8) else {
@@ -434,6 +435,82 @@ class WebSocketService: NSObject, ObservableObject {
         }
     }
 
+    /// 备用解析：当 WSMessage 主解析失败时，手动提取关键字段
+    private func parseFallbackMessage(data: Data, sessionId: String) -> WSMessage? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        var msg = WSMessage(
+            type: nil, text: nil, blockType: nil, toolName: nil, toolUseId: nil,
+            input: nil, content: nil, isError: nil, requestId: nil, description: nil,
+            questionId: nil, questionText: nil, options: nil, sessionId: sessionId,
+            state: nil, verb: nil, timestamp: nil, id: nil, percentage: nil,
+            used: nil, total: nil, title: nil, questions: nil
+        )
+
+        // 提取 type
+        if let typeStr = json["type"] as? String {
+            msg.type = WSMessageType(rawValue: typeStr) ?? .unknown
+        }
+
+        // 提取 questions 数组（桌面端常用格式）
+        if let questionsArray = json["questions"] as? [[String: Any]] {
+            msg.questions = questionsArray.compactMap { dict -> QuestionItem? in
+                var item = QuestionItem(question: nil, header: nil, options: nil, multiSelect: nil)
+                item.question = dict["question"] as? String
+                item.header = dict["header"] as? String
+                item.multiSelect = dict["multi_select"] as? Bool ?? dict["multiSelect"] as? Bool
+
+                // 处理 options：支持字符串数组和对象数组
+                if let opts = dict["options"] as? [String] {
+                    item.options = opts.map { QuestionOption(label: $0, description: nil) }
+                } else if let opts = dict["options"] as? [[String: Any]] {
+                    item.options = opts.compactMap { optDict -> QuestionOption? in
+                        let label = optDict["label"] as? String
+                        let desc = optDict["description"] as? String
+                        return QuestionOption(label: label, description: desc)
+                    }
+                }
+                return item
+            }
+            // 如果有 questions 但没有 type，自动标记
+            if msg.type == nil {
+                msg.type = .questions
+            }
+        }
+
+        // 提取直接字段格式的问题
+        msg.questionId = json["question_id"] as? String ?? json["questionId"] as? String
+        msg.questionText = json["question_text"] as? String ?? json["questionText"] as? String
+        if let opts = json["options"] as? [String] {
+            msg.options = opts
+        }
+
+        // 提取权限请求字段
+        msg.requestId = json["request_id"] as? String ?? json["requestId"] as? String
+        msg.description = json["description"] as? String
+        msg.toolName = json["tool_name"] as? String ?? json["toolName"] as? String
+
+        // 提取其他常用字段
+        msg.text = json["text"] as? String
+        msg.blockType = json["block_type"] as? String ?? json["blockType"] as? String
+        msg.toolUseId = json["tool_use_id"] as? String ?? json["toolUseId"] as? String
+        msg.state = json["state"] as? String
+        msg.sessionId = json["session_id"] as? String ?? json["sessionId"] as? String ?? sessionId
+        msg.id = json["id"] as? String
+        msg.timestamp = json["timestamp"] as? String
+        msg.title = json["title"] as? String
+        msg.isError = json["is_error"] as? Bool ?? json["isError"] as? Bool
+
+        if let used = json["used"] as? Int { msg.used = used }
+        if let total = json["total"] as? Int { msg.total = total }
+        if let percentage = json["percentage"] as? Double { msg.percentage = percentage }
+
+        print("[GlobalWS] 🔧 Fallback parsed type: \(msg.type?.rawValue ?? "nil"), questions: \(msg.questions != nil)")
+        return msg
+    }
+
     private func parseGlobalMessage(sessionId: String, text: String) {
         guard let data = text.data(using: .utf8) else { return }
 
@@ -442,9 +519,18 @@ class WebSocketService: NSObject, ObservableObject {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
 
-        guard var message = try? decoder.decode(WSMessage.self, from: data) else {
-            print("[GlobalWS] ❌ Failed to parse message for \(sessionId): \(text)")
-            return
+        var message: WSMessage
+        if var decoded = try? decoder.decode(WSMessage.self, from: data) {
+            message = decoded
+        } else {
+            print("[GlobalWS] ⚠️ Primary decode failed, trying fallback for \(sessionId)")
+            // 备用解析：尝试提取关键字段，不让整个消息丢失
+            if let fallback = parseFallbackMessage(data: data, sessionId: sessionId) {
+                message = fallback
+            } else {
+                print("[GlobalWS] ❌ Failed to parse message for \(sessionId): \(text)")
+                return
+            }
         }
 
         if message.sessionId == nil {
@@ -573,6 +659,7 @@ struct OutgoingMessage: Encodable {
     var rule: String?
     var questionId: String?
     var answer: String?
+    var mode: String?  // 权限模式（与桌面端字段名一致）
 
     static func userMessage(_ content: String) -> OutgoingMessage {
         OutgoingMessage(type: "user_message", content: content)
@@ -592,5 +679,10 @@ struct OutgoingMessage: Encodable {
 
     static func questionResponse(questionId: String, answer: String) -> OutgoingMessage {
         OutgoingMessage(type: "question_response", questionId: questionId, answer: answer)
+    }
+
+    /// 切换权限模式（与桌面端字段名一致：mode）
+    static func setPermissionMode(_ mode: PermissionMode) -> OutgoingMessage {
+        OutgoingMessage(type: "set_permission_mode", mode: mode.rawValue)
     }
 }

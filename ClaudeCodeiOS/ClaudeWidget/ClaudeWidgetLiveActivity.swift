@@ -2,7 +2,7 @@
 //  ClaudeWidgetLiveActivity.swift
 //  ClaudeWidget
 //
-//  简化版：三个状态（休闲中、工作中、已完成）
+//  灵动岛：实时显示多会话内容
 //
 
 import ActivityKit
@@ -11,15 +11,26 @@ import SwiftUI
 
 // MARK: - 活动属性
 
+/// 会话摘要（用于锁屏显示多个会话）
+struct SessionSummary: Codable, Hashable {
+    var title: String
+    var content: String
+    var type: ActivityType
+}
+
 struct ClaudeActivityAttributes: ActivityAttributes {
     public struct ContentState: Codable, Hashable {
         var status: ClaudeWorkStatus
         var statusText: String
-        var lastMessage: String
+        var toolName: String
+        var activityContent: String
+        var activityType: ActivityType
         var sessionTitle: String
         var elapsedSeconds: Int
-        var completedTasks: Int
-        var totalTasks: Int
+        var activeSessions: Int
+        var totalSessions: Int
+        var animationTimestamp: Double
+        var sessionSummaries: [SessionSummary]
     }
 
     var sessionId: String
@@ -38,34 +49,50 @@ enum ClaudeWorkStatus: String, Codable {
     }
 }
 
+enum ActivityType: String, Codable {
+    case thinking, toolUse, streaming, completed, idle
+}
+
 // MARK: - Live Activity Widget
 
 struct ClaudeWidgetLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: ClaudeActivityAttributes.self) { context in
-            HStack(spacing: 12) {
-                MascotView(
-                    status: context.state.status,
-                    color: Color(hex: context.attributes.mascotColorHex),
-                    size: 36,
-                    frame: context.state.elapsedSeconds
-                )
+            // 锁屏/通知中心显示 - 显示多个会话
+            VStack(alignment: .leading, spacing: 8) {
+                // 顶部状态栏
+                HStack {
+                    MascotView(
+                        status: context.state.status,
+                        color: Color(hex: context.attributes.mascotColorHex),
+                        size: 28,
+                        timestamp: context.state.animationTimestamp
+                    )
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(context.state.sessionTitle)
+                    Text("Claude Code")
                         .font(.headline)
-                        .lineLimit(1)
 
-                    Text(context.state.statusText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Spacer()
+
+                    SessionCountBadge(
+                        active: context.state.activeSessions,
+                        total: context.state.totalSessions,
+                        status: context.state.status
+                    )
                 }
 
-                Spacer()
-
-                Text("\(context.state.completedTasks)/\(context.state.totalTasks)")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(context.state.status == .completed ? .green : .primary)
+                // 会话列表
+                if !context.state.sessionSummaries.isEmpty {
+                    ForEach(context.state.sessionSummaries, id: \.title) { summary in
+                        SessionSummaryRow(summary: summary)
+                    }
+                } else if !context.state.activityContent.isEmpty {
+                    // 单会话模式
+                    Text(context.state.activityContent)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .lineLimit(3)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -77,26 +104,35 @@ struct ClaudeWidgetLiveActivity: Widget {
                         status: context.state.status,
                         color: Color(hex: context.attributes.mascotColorHex),
                         size: 48,
-                        frame: context.state.elapsedSeconds
+                        timestamp: context.state.animationTimestamp
                     )
                 }
 
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text("\(context.state.completedTasks)/\(context.state.totalTasks)")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(context.state.status == .completed ? .green : .primary)
+                    SessionCountBadge(
+                        active: context.state.activeSessions,
+                        total: context.state.totalSessions,
+                        status: context.state.status,
+                        fontSize: 18
+                    )
                 }
 
                 DynamicIslandExpandedRegion(.center) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    // 中间：项目名称 + 正在做的事情（两行）
+                    VStack(alignment: .center, spacing: 2) {
+                        // 第一行：项目名称
                         Text(context.state.sessionTitle)
-                            .font(.caption)
-                            .fontWeight(.semibold)
+                            .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
+                            .truncationMode(.tail)
+                            .multilineTextAlignment(.center)
 
-                        Text(context.state.statusText)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+                        // 第二行：根据类型显示不同内容
+                        CenterStatusView(
+                            activityType: context.state.activityType,
+                            toolName: context.state.toolName,
+                            activityContent: context.state.activityContent
+                        )
                     }
                 }
             } compactLeading: {
@@ -104,171 +140,268 @@ struct ClaudeWidgetLiveActivity: Widget {
                     status: context.state.status,
                     color: Color(hex: context.attributes.mascotColorHex),
                     size: 24,
-                    frame: context.state.elapsedSeconds
+                    timestamp: context.state.animationTimestamp
                 )
             } compactTrailing: {
-                Text("\(context.state.completedTasks)/\(context.state.totalTasks)")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(context.state.status == .completed ? .green : .primary)
+                SessionCountBadge(
+                    active: context.state.activeSessions,
+                    total: context.state.totalSessions,
+                    status: context.state.status,
+                    fontSize: 14
+                )
             } minimal: {
-                Text("\(context.state.completedTasks)")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(context.state.status == .completed ? .green : .primary)
+                SessionCountBadge(
+                    active: context.state.activeSessions,
+                    total: context.state.totalSessions,
+                    status: context.state.status,
+                    fontSize: 14,
+                    minimal: true
+                )
             }
         }
     }
 }
 
-// MARK: - 吉祥物视图（三个状态）
+// MARK: - 中间状态视图
+
+// MARK: - 中间状态视图（完全遵循 CodeIsland 逻辑）
+
+struct CenterStatusView: View {
+    let activityType: ActivityType
+    let toolName: String
+    let activityContent: String
+
+    var body: some View {
+        // 有工具调用：显示工具名 + 描述
+        if !toolName.isEmpty {
+            HStack(spacing: 4) {
+                Text(toolName)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(toolColor(toolName))
+                if !activityContent.isEmpty {
+                    Text(activityContent)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+        } else if activityType == .thinking {
+            // 思考中：只显示 thinking，不显示思考内容
+            Text("thinking")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(Color(red: 0.6, green: 0.8, blue: 1.0))
+        }
+        // 其他情况（流式输出、完成、空闲）：不显示第二行
+    }
+
+    /// 工具名称对应的颜色
+    private func toolColor(_ name: String) -> Color {
+        switch name.lowercased() {
+        case "bash": return Color(red: 0.4, green: 1.0, blue: 0.5)
+        case "edit", "write": return Color(red: 0.5, green: 0.7, blue: 1.0)
+        case "read": return Color(red: 0.9, green: 0.8, blue: 0.4)
+        case "grep": return Color(red: 1.0, green: 0.6, blue: 0.8)
+        case "glob": return Color(red: 0.8, green: 0.6, blue: 1.0)
+        default: return Color(red: 1.0, green: 0.7, blue: 0.3)
+        }
+    }
+}
+
+// MARK: - 会话摘要行
+
+struct SessionSummaryRow: View {
+    let summary: SessionSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                // 类型图标
+                typeIcon
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundColor(typeColor)
+
+                // 会话标题
+                Text(summary.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+
+            // 内容
+            if !summary.content.isEmpty {
+                Text(summary.content)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.75))
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var typeIcon: some View {
+        switch summary.type {
+        case .thinking: Image(systemName: "brain")
+        case .toolUse: Image(systemName: "wrench.and.screwdriver")
+        case .streaming: Image(systemName: "text.bubble")
+        case .completed: Image(systemName: "checkmark.circle")
+        case .idle: Image(systemName: "moon.zzz")
+        }
+    }
+
+    private var typeColor: Color {
+        switch summary.type {
+        case .thinking: return Color(red: 0.6, green: 0.8, blue: 1.0)
+        case .toolUse: return Color(red: 1.0, green: 0.7, blue: 0.3)
+        case .streaming: return Color(red: 0.4, green: 1.0, blue: 0.5)
+        case .completed: return Color(red: 0.3, green: 0.9, blue: 0.5)
+        case .idle: return Color.white.opacity(0.5)
+        }
+    }
+}
+
+// MARK: - 会话数徽章
+
+struct SessionCountBadge: View {
+    let active: Int
+    let total: Int
+    let status: ClaudeWorkStatus
+    var fontSize: CGFloat = 14
+    var minimal: Bool = false
+
+    var body: some View {
+        HStack(spacing: 1) {
+            if active > 0 && !minimal {
+                Text("\(active)")
+                    .foregroundStyle(Color(red: 0.4, green: 1.0, blue: 0.5))
+                Text("/")
+                    .foregroundStyle(Color.white.opacity(0.4))
+            }
+            Text(minimal ? "\(active)" : "\(total)")
+                .foregroundStyle(Color.white.opacity(0.9))
+        }
+        .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+    }
+}
+
+// MARK: - 吉祥物视图
 
 struct MascotView: View {
     let status: ClaudeWorkStatus
     let color: Color
     var size: CGFloat = 28
-    var frame: Int = 0
+    var timestamp: Double = 0
 
-    // elapsedSeconds 每 0.5 秒增加 1，所以 t 是实际秒数
-    private var t: Double { Double(frame) * 0.5 }
+    /// 时间（秒）
+    private var t: Double { timestamp }
 
     var body: some View {
         Canvas { context, canvasSize in
             switch status {
-            case .idle:
-                drawIdle(context: context)       // 休闲中：睡眠呼吸 + ZZZ
-            case .working:
-                drawWorking(context: context)    // 工作中：敲键盘
-            case .completed:
-                drawCompleted(context: context)  // 已完成：庆祝挥手
+            case .idle: drawIdle(context: context)
+            case .working: drawWorking(context: context)
+            case .completed: drawCompleted(context: context)
             }
         }
         .frame(width: size, height: size)
     }
 
-    private var s: CGFloat { size / 20 }
-
-    // MARK: - 呼吸脉冲
-
-    private var breathPulse: CGFloat {
-        let phase = t.truncatingRemainder(dividingBy: 2.0) / 2.0
-        return (sin(phase * 2 * .pi) + 1) / 2
-    }
-
-    private var fastPulse: CGFloat {
-        let phase = t.truncatingRemainder(dividingBy: 0.5) / 0.5
-        return (sin(phase * 2 * .pi) + 1) / 2
-    }
-
-    private var gentlePulse: CGFloat {
-        let phase = t.truncatingRemainder(dividingBy: 1.0) / 1.0
-        return (sin(phase * 2 * .pi) + 1) / 2
-    }
-
-    // MARK: - 1. 休闲状态：睡眠呼吸 + ZZZ
+    private var s: CGFloat { size / 17 }
 
     private func drawIdle(context: GraphicsContext) {
-        let bodyScale = 0.9 + breathPulse * 0.1
-        let bodyH = 7 * s * bodyScale
+        // 呼吸动画：周期 2 秒
+        let breathPhase = sin(t * .pi)
+        let puff = breathPhase > 0 ? breathPhase * 0.25 : 0
+        let ox = (size - 17 * s) / 2
+        let oy = (size - 7 * s) / 2 - 4 * s
 
-        // 身体
-        context.fill(
-            RoundedRectangle(cornerRadius: 2 * s)
-                .path(in: CGRect(x: 4 * s, y: size - 6 * s - bodyH, width: 12 * s, height: bodyH)),
-            with: .color(color)
-        )
+        context.fill(Path(roundedRect: CGRect(x: ox, y: oy + 15 * s, width: 17 * s, height: s), cornerRadius: 0), with: .color(.black.opacity(0.35)))
 
-        // 闭眼
-        let eyeY = size - 8 * s - bodyH * 0.3
-        context.fill(Capsule().path(in: CGRect(x: 6.5 * s, y: eyeY, width: 3 * s, height: 1.2 * s)), with: .color(Color(hex: "1a1a1a")))
-        context.fill(Capsule().path(in: CGRect(x: 10.5 * s, y: eyeY, width: 3 * s, height: 1.2 * s)), with: .color(Color(hex: "1a1a1a")))
+        for x in [3, 5, 9, 11] {
+            context.fill(Path(roundedRect: CGRect(x: ox + CGFloat(x) * s, y: oy + 8.5 * s, width: s, height: 1.5 * s), cornerRadius: 0), with: .color(color))
+        }
 
-        // ZZZ
+        let torsoH = 5 * (1.0 + puff)
+        let torsoY = 15 - torsoH
+        let torsoW = 13 + puff * 0.2
+        let torsoX = 1 - (torsoW - 13) / 2
+
+        context.fill(Path(roundedRect: CGRect(x: ox + torsoX * s, y: oy + torsoY * s, width: torsoW * s, height: torsoH * s), cornerRadius: 0), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox - s, y: oy + 13 * s, width: 2 * s, height: 2 * s), cornerRadius: 0), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 14 * s, y: oy + 13 * s, width: 2 * s, height: 2 * s), cornerRadius: 0), with: .color(color))
+
+        let eyeY = 12.2 - puff * 2.5
+        context.fill(Path(roundedRect: CGRect(x: ox + 3 * s, y: oy + eyeY * s, width: 2.5 * s, height: s), cornerRadius: 0), with: .color(Color(hex: "1a1a1a")))
+        context.fill(Path(roundedRect: CGRect(x: ox + 9.5 * s, y: oy + eyeY * s, width: 2.5 * s, height: s), cornerRadius: 0), with: .color(Color(hex: "1a1a1a")))
+
+        // "z" 闪烁：周期 0.5 秒
+        let zOpacity = 0.3 + 0.4 * sin(t * .pi * 4)
         for i in 0..<3 {
-            let zPhase = (t + Double(i) * 0.5).truncatingRemainder(dividingBy: 2.0) / 2.0
-            let zOpacity = (sin(zPhase * 2 * .pi) + 1) / 2 * 0.6
-            let zSize = CGFloat(10 - i * 2)
-            context.draw(
-                Text("z").font(.system(size: zSize, weight: .bold)).foregroundColor(.white.opacity(zOpacity)),
-                at: CGPoint(x: 16 * s, y: CGFloat(2 + i * 3) * s),
-                anchor: .topLeading
-            )
+            let zSize = size * (0.22 - CGFloat(i) * 0.03)
+            context.draw(Text("z").font(.system(size: zSize, weight: .black)).foregroundColor(.white.opacity(zOpacity - CGFloat(i) * 0.1)), at: CGPoint(x: ox + (16 + CGFloat(i)) * s, y: oy + (3 - CGFloat(i) * 2.5) * s), anchor: .center)
         }
     }
-
-    // MARK: - 2. 工作状态：敲键盘
 
     private func drawWorking(context: GraphicsContext) {
-        let bounce = (fastPulse - 0.5) * 3 * s
+        // 弹跳动画：4Hz，幅度 1.5
+        let bounce = 1.5 * sin(t * 2 * .pi * 4)
+        let ox = (size - 16 * s) / 2
+        let oy = (size - 11 * s) / 2 - 2 * s
 
-        // 影子
-        context.fill(
-            Ellipse().path(in: CGRect(x: 5 * s, y: size - 3 * s, width: 10 * s, height: 2 * s)),
-            with: .color(Color.black.opacity(0.2))
-        )
+        let shadowAlpha = 0.2 + 0.2 * (1 + sin(t * 2 * .pi * 4)) / 2
+        context.fill(Path(roundedRect: CGRect(x: ox + 3 * s, y: oy + 15 * s, width: 9 * s, height: s), cornerRadius: 0), with: .color(.black.opacity(shadowAlpha)))
 
-        // 身体
-        let bodyY = size / 2 - 4 * s + bounce
-        context.fill(
-            RoundedRectangle(cornerRadius: 2 * s)
-                .path(in: CGRect(x: 4 * s, y: bodyY, width: 12 * s, height: 7 * s)),
-            with: .color(color)
-        )
-
-        // 眼睛
-        let eyeY = bodyY + 2 * s
-        context.fill(RoundedRectangle(cornerRadius: 0.2 * s).path(in: CGRect(x: 7 * s, y: eyeY, width: s, height: s)), with: .color(Color(hex: "1a1a1a")))
-        context.fill(RoundedRectangle(cornerRadius: 0.2 * s).path(in: CGRect(x: 12 * s, y: eyeY, width: s, height: s)), with: .color(Color(hex: "1a1a1a")))
-
-        // 键盘
-        context.fill(RoundedRectangle(cornerRadius: s).path(in: CGRect(x: 3 * s, y: size - 5 * s, width: 14 * s, height: 3 * s)), with: .color(Color(hex: "404040")))
-
-        // 按键闪烁
-        for i in 0..<5 {
-            let keyPulse = (sin(t * 6 + Double(i) * 0.8) + 1) / 2
-            let keyX = 4 * s + CGFloat(i) * 2.5 * s
-            context.fill(
-                RoundedRectangle(cornerRadius: 0.3 * s)
-                    .path(in: CGRect(x: keyX, y: size - 4.5 * s, width: 2 * s, height: s)),
-                with: .color(Color(hex: "808080").opacity(0.5 + keyPulse * 0.5))
-            )
+        for x in [3, 5, 9, 11] {
+            context.fill(Path(roundedRect: CGRect(x: ox + CGFloat(x) * s, y: oy + 13 * s, width: s, height: 2 * s), cornerRadius: 0), with: .color(color))
         }
 
-        // 手臂
-        let armY = bodyY + 4 * s
-        context.fill(RoundedRectangle(cornerRadius: 0.5 * s).path(in: CGRect(x: 2 * s, y: armY, width: 2 * s, height: 2 * s)), with: .color(color))
-        context.fill(RoundedRectangle(cornerRadius: 0.5 * s).path(in: CGRect(x: 16 * s, y: armY, width: 2 * s, height: 2 * s)), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 2 * s, y: oy + (6 + bounce) * s, width: 11 * s, height: 7 * s), cornerRadius: 0), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 4 * s, y: oy + (8 + bounce) * s, width: s, height: s), cornerRadius: 0), with: .color(Color(hex: "1a1a1a")))
+        context.fill(Path(roundedRect: CGRect(x: ox + 10 * s, y: oy + (8 + bounce) * s, width: s, height: s), cornerRadius: 0), with: .color(Color(hex: "1a1a1a")))
+
+        context.fill(Path(roundedRect: CGRect(x: ox - 0.5 * s, y: oy + 11.8 * s, width: 16 * s, height: 3.5 * s), cornerRadius: 0), with: .color(Color(hex: "616e7a")))
+
+        // 键盘高亮：滚动效果
+        let highlightCol = Int(t * 3) % 6
+        for col in 0...5 {
+            let keyX = ox + (0.3 + CGFloat(col) * 2.5) * s
+            let isHighlight = col == highlightCol
+            let keyColor = isHighlight ? Color(hex: "d4d4d4") : Color(hex: "9aa8b4")
+            context.fill(Path(roundedRect: CGRect(x: keyX, y: oy + 12.2 * s, width: 2 * s, height: 0.7 * s), cornerRadius: 0), with: .color(keyColor))
+            context.fill(Path(roundedRect: CGRect(x: keyX, y: oy + 13.2 * s, width: 2 * s, height: 0.7 * s), cornerRadius: 0), with: .color(keyColor))
+        }
+
+        context.fill(Path(roundedRect: CGRect(x: ox, y: oy + (9 + bounce) * s, width: 2 * s, height: 2 * s), cornerRadius: 0), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 13 * s, y: oy + (9 + bounce) * s, width: 2 * s, height: 2 * s), cornerRadius: 0), with: .color(color))
     }
 
-    // MARK: - 3. 完成状态：庆祝 + 星星
-
     private func drawCompleted(context: GraphicsContext) {
-        let bounce = (gentlePulse - 0.5) * s
-        let wave = sin(t * 4 * .pi) * 2 * s
+        // 挥手动画：周期 1.5 秒
+        let bounce = 1.5 * sin(t * 2 * .pi / 1.5)
+        // 手臂摆动：周期 0.6 秒
+        let armWave = 2.0 * sin(t * 2 * .pi / 0.6)
 
-        // 身体
-        let bodyY = size / 2 - 2 * s + bounce
-        context.fill(
-            RoundedRectangle(cornerRadius: 2 * s)
-                .path(in: CGRect(x: 4 * s, y: bodyY, width: 12 * s, height: 6 * s)),
-            with: .color(color)
-        )
+        let ox = (size - 17 * s) / 2
+        let oy = (size - 14 * s) / 2 - 1 * s
 
-        // 开心眼睛
-        let eyeY = bodyY + 2 * s
-        context.fill(RoundedRectangle(cornerRadius: 0.2 * s).path(in: CGRect(x: 7 * s, y: eyeY, width: s, height: s)), with: .color(Color(hex: "1a1a1a")))
-        context.fill(RoundedRectangle(cornerRadius: 0.2 * s).path(in: CGRect(x: 12 * s, y: eyeY, width: s, height: s)), with: .color(Color(hex: "1a1a1a")))
+        context.fill(Path(roundedRect: CGRect(x: ox + 3 * s, y: oy + 15 * s, width: 9 * s, height: s), cornerRadius: 0), with: .color(.black.opacity(0.3)))
 
-        // 微笑
-        context.fill(Capsule().path(in: CGRect(x: 8 * s, y: eyeY + 2 * s, width: 4 * s, height: s * 0.8)), with: .color(Color(hex: "1a1a1a")))
+        for x in [3, 5, 9, 11] {
+            context.fill(Path(roundedRect: CGRect(x: ox + CGFloat(x) * s, y: oy + 11 * s, width: s, height: 3 * s), cornerRadius: 0), with: .color(color))
+        }
 
-        // 手臂挥舞
-        context.fill(RoundedRectangle(cornerRadius: 0.5 * s).path(in: CGRect(x: 1 * s, y: 1 * s + wave, width: 2 * s, height: 5 * s)), with: .color(color))
-        context.fill(RoundedRectangle(cornerRadius: 0.5 * s).path(in: CGRect(x: 17 * s, y: 1 * s - wave, width: 2 * s, height: 5 * s)), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 2 * s, y: oy + 6 * s, width: 11 * s, height: 6 * s), cornerRadius: 0), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 3.5 * s, y: oy + 8 * s, width: s, height: s), cornerRadius: 0), with: .color(Color(hex: "1a1a1a")))
+        context.fill(Path(roundedRect: CGRect(x: ox + 9.5 * s, y: oy + 8 * s, width: s, height: s), cornerRadius: 0), with: .color(Color(hex: "1a1a1a")))
+        context.fill(Path(roundedRect: CGRect(x: ox + 6 * s, y: oy + 10 * s, width: 3 * s, height: 0.8 * s), cornerRadius: 0.4 * s), with: .color(Color(hex: "1a1a1a")))
 
-        // 星星（交替闪烁）
-        let star1 = gentlePulse
-        let star2 = 1 - gentlePulse
-        context.fill(RoundedRectangle(cornerRadius: 0.3 * s).path(in: CGRect(x: 0, y: 0, width: 1.5 * s, height: 1.5 * s)), with: .color(Color(hex: "fbbf24").opacity(star1)))
-        context.fill(RoundedRectangle(cornerRadius: 0.3 * s).path(in: CGRect(x: 18 * s, y: 0, width: 1.5 * s, height: 1.5 * s)), with: .color(Color(hex: "fbbf24").opacity(star2)))
+        context.fill(Path(roundedRect: CGRect(x: ox - s, y: oy + (2 + armWave) * s, width: 2 * s, height: 5 * s), cornerRadius: 0), with: .color(color))
+        context.fill(Path(roundedRect: CGRect(x: ox + 14 * s, y: oy + (2 - armWave) * s, width: 2 * s, height: 5 * s), cornerRadius: 0), with: .color(color))
+
+        // 星星闪烁
+        let starOn = sin(t * .pi * 2) > 0
+        context.fill(Path(roundedRect: CGRect(x: ox - 2 * s, y: oy + s, width: s, height: s), cornerRadius: 0), with: .color(Color(hex: "fbbf24").opacity(starOn ? 1.0 : 0.3)))
+        context.fill(Path(roundedRect: CGRect(x: ox + 16 * s, y: oy, width: 1.2 * s, height: 1.2 * s), cornerRadius: 0), with: .color(Color(hex: "fbbf24").opacity(starOn ? 0.3 : 1.0)))
     }
 }
 
@@ -300,13 +433,68 @@ extension ClaudeActivityAttributes {
 
 extension ClaudeActivityAttributes.ContentState {
     fileprivate static var working: ClaudeActivityAttributes.ContentState {
-        .init(status: .working, statusText: "工作中...", lastMessage: "", sessionTitle: "测试", elapsedSeconds: 45, completedTasks: 1, totalTasks: 2)
+        .init(
+            status: .working,
+            statusText: "工作中...",
+            toolName: "Bash",
+            activityContent: "npm install",
+            activityType: .toolUse,
+            sessionTitle: "性能优化",
+            elapsedSeconds: 45,
+            activeSessions: 2,
+            totalSessions: 3,
+            animationTimestamp: CACurrentMediaTime(),
+            sessionSummaries: [
+                SessionSummary(title: "性能优化", content: "正在分析代码结构，查找潜在的性能问题...", type: .thinking),
+                SessionSummary(title: "API 集成", content: "Bash: npm install axios", type: .toolUse),
+                SessionSummary(title: "文档编写", content: "生成 README.md 内容...", type: .streaming)
+            ]
+        )
+    }
+    fileprivate static var thinking: ClaudeActivityAttributes.ContentState {
+        .init(
+            status: .working,
+            statusText: "工作中...",
+            toolName: "",
+            activityContent: "分析代码结构...",
+            activityType: .thinking,
+            sessionTitle: "性能优化",
+            elapsedSeconds: 30,
+            activeSessions: 1,
+            totalSessions: 1,
+            animationTimestamp: CACurrentMediaTime(),
+            sessionSummaries: []
+        )
     }
     fileprivate static var idle: ClaudeActivityAttributes.ContentState {
-        .init(status: .idle, statusText: "休闲中", lastMessage: "", sessionTitle: "测试", elapsedSeconds: 0, completedTasks: 0, totalTasks: 1)
+        .init(
+            status: .idle,
+            statusText: "休闲中",
+            toolName: "",
+            activityContent: "",
+            activityType: .idle,
+            sessionTitle: "Claude Code",
+            elapsedSeconds: 0,
+            activeSessions: 0,
+            totalSessions: 1,
+            animationTimestamp: CACurrentMediaTime(),
+            sessionSummaries: []
+        )
     }
     fileprivate static var completed: ClaudeActivityAttributes.ContentState {
-        .init(status: .completed, statusText: "已完成", lastMessage: "完成", sessionTitle: "测试", elapsedSeconds: 120, completedTasks: 2, totalTasks: 2)
+        .init(
+            status: .completed,
+            statusText: "已完成",
+            toolName: "",
+            activityContent: "已成功优化数据库查询性能",
+            activityType: .completed,
+            sessionTitle: "性能优化",
+            elapsedSeconds: 120,
+            activeSessions: 0,
+            totalSessions: 2,
+            animationTimestamp: CACurrentMediaTime(),
+            sessionSummaries: []
+        )
     }
 }
 
@@ -314,6 +502,7 @@ extension ClaudeActivityAttributes.ContentState {
     ClaudeWidgetLiveActivity()
 } contentStates: {
     ClaudeActivityAttributes.ContentState.idle
+    ClaudeActivityAttributes.ContentState.thinking
     ClaudeActivityAttributes.ContentState.working
     ClaudeActivityAttributes.ContentState.completed
 }

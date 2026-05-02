@@ -121,16 +121,22 @@ struct MarkdownParser {
 
 private class InlineTextCache {
     static let shared = InlineTextCache()
-    private var cache = NSCache<NSString, NSAttributedString>()
+    private var cache = NSCache<NSString, InlineTextCacheEntry>()
 
     func getAttributed(for text: String) -> AttributedString? {
-        guard let nsAttr = cache.object(forKey: text as NSString) else { return nil }
-        return AttributedString(nsAttr)
+        cache.object(forKey: text as NSString)?.attributed
     }
 
     func setAttributed(_ attr: AttributedString, for text: String) {
-        let nsAttr = NSAttributedString(attr)
-        cache.setObject(nsAttr, forKey: text as NSString)
+        cache.setObject(InlineTextCacheEntry(attributed: attr), forKey: text as NSString)
+    }
+}
+
+// NSCache 只能存 class 类型，用包装类
+private class InlineTextCacheEntry {
+    let attributed: AttributedString
+    init(attributed: AttributedString) {
+        self.attributed = attributed
     }
 }
 

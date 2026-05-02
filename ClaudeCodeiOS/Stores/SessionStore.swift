@@ -22,6 +22,14 @@ class SessionStore: ObservableObject {
     @Published var sessionStatuses: [String: SessionStatus] = [:]
     @Published var contextUsages: [String: Int] = [:]
 
+    // 权限模式（每个会话独立）
+    @Published var sessionPermissionModes: [String: PermissionMode] = [:]
+
+    // 任务列表（独立于消息流，用于底部折叠面板）
+    @Published var sessionTasks: [String: [TaskItem]] = [:]
+    @Published var taskBarExpanded: Bool = false
+    @Published var taskBarDismissed: Bool = false
+
     // 加载状态
     @Published var isLoading: Bool = false
     @Published var isCreating: Bool = false
@@ -35,6 +43,10 @@ class SessionStore: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var webSocketTaskSessionId: String?
     private var globalWSSubscribed = false
+
+    // objectWillChange 防抖：合并快速连续的刷新请求
+    private var objectWillChangeTask: DispatchWorkItem?
+    private let debounceInterval: TimeInterval = 1.0 / 60.0  // 约 16ms，一帧的时间
 
     // 本地存储目录
     private let messagesDirectory: URL = {
@@ -137,6 +149,16 @@ class SessionStore: ObservableObject {
         return Date.distantPast
     }
 
+    /// 防抖刷新 UI：合并快速连续的 objectWillChange 调用
+    func notifyChanged() {
+        objectWillChangeTask?.cancel()
+        let task = DispatchWorkItem { [weak self] in
+            self?.objectWillChange.send()
+        }
+        objectWillChangeTask = task
+        DispatchQueue.main.async(execute: task)
+    }
+
     init() {
         // 加载保存的会话数据
         loadSavedData()
@@ -183,7 +205,18 @@ class SessionStore: ObservableObject {
 
             let isCurrentSession = self.currentSessionId == sessionId
 
-            switch message.type {
+            // 处理 type 为 nil 的情况（桌面端发送的 questions 数组格式）
+            var messageType = message.type
+            if messageType == nil && message.questions != nil {
+                messageType = .questions
+                print("[SessionStore] 🔧 Auto-detecting questions type (type was nil)")
+            }
+
+            print("[SessionStore] 📩 Message type: \(String(describing: messageType)), questions: \(message.questions != nil ? "yes" : "no")")
+
+            guard let messageType = messageType else { return }
+
+            switch messageType {
             case .sessionTitleUpdated:
                 if let title = message.title { self.updateSessionTitle(sessionId, title) }
 
@@ -195,18 +228,43 @@ class SessionStore: ObservableObject {
                 let currentStatus = self.sessionStatuses[sessionId]
                 if message.type == .thinking {
                     self.sessionStatuses[sessionId] = .thinking
-                    // 更新灵动岛 - 统一显示为"工作中"
-                    self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "工作中...")
+                    // 更新灵动岛状态
+                    let sessionTitle = self.sessions.first { $0.id == sessionId }?.title ?? "对话"
+                    LiveActivityService.shared.sessionStartedWorking(sessionId: sessionId, sessionTitle: sessionTitle)
+                    // 非当前会话才在这里更新内容（当前会话由 ChatView 更新）
+                    if !isCurrentSession, let text = message.text {
+                        LiveActivityService.shared.updateThinkingContent(text, sessionId: sessionId)
+                    }
                 } else if currentStatus != .streaming && currentStatus != .thinking {
                     self.sessionStatuses[sessionId] = .streaming
                     // 更新灵动岛
-                    self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "工作中...")
+                    let sessionTitle = self.sessions.first { $0.id == sessionId }?.title ?? "对话"
+                    LiveActivityService.shared.sessionStartedWorking(sessionId: sessionId, sessionTitle: sessionTitle)
+                }
+                // 非当前会话的流式文本内容更新（当前会话由 ChatView 更新）
+                if !isCurrentSession, let text = message.text, message.type == .contentDelta {
+                    LiveActivityService.shared.updateStreamingContent(text, sessionId: sessionId)
                 }
 
             case .toolUseComplete:
                 self.sessionStatuses[sessionId] = .toolExecuting
-                // 更新灵动岛 - 统一显示为"工作中"
-                self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "工作中...")
+                // 更新灵动岛状态
+                let sessionTitle = self.sessions.first { $0.id == sessionId }?.title ?? "对话"
+                LiveActivityService.shared.sessionStartedWorking(sessionId: sessionId, sessionTitle: sessionTitle)
+                // 非当前会话才在这里更新工具调用内容
+                if !isCurrentSession, let toolName = message.toolName {
+                    var inputSummary: String? = nil
+                    if let input = message.input {
+                        if let filePath = input["file_path"]?.value as? String {
+                            inputSummary = (filePath as NSString).lastPathComponent
+                        } else if let command = input["command"]?.value as? String {
+                            inputSummary = String(command.prefix(50))
+                        }
+                    }
+                    LiveActivityService.shared.updateToolUse(toolName: toolName, toolInput: inputSummary, sessionId: sessionId)
+                }
+                // 拦截任务相关工具调用，提取任务数据
+                self.handleTaskToolCall(sessionId, toolName: message.toolName, input: message.input)
 
             case .toolResult:
                 break // 非当前会话不关心工具结果
@@ -215,14 +273,17 @@ class SessionStore: ObservableObject {
                 print("[SessionStore] ✅ messageComplete for \(sessionId)")
                 self.sessionStatuses[sessionId] = .completed
                 // 触发 objectWillChange 让会话列表刷新
-                self.objectWillChange.send()
+                self.notifyChanged()
 
                 // 获取最后一条助手消息
                 let lastAssistantMsg = self.messages[sessionId]?.last(where: { $0.type == .assistant })
                 let lastMessage = lastAssistantMsg?.content ?? ""
 
-                // 完成灵动岛
-                LiveActivityService.shared.completeWork(lastMessage: lastMessage)
+                // 完成灵动岛（使用新的多会话 API）
+                LiveActivityService.shared.sessionCompleted(
+                    sessionId: sessionId,
+                    lastMessage: lastMessage
+                )
 
                 // 🔔 非当前会话发送完成通知
                 if !isCurrentSession {
@@ -241,6 +302,10 @@ class SessionStore: ObservableObject {
                 self.sessionStatuses[sessionId] = .permissionPending
                 // 更新灵动岛 - 统一显示为"工作中"
                 self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待权限...")
+                // 添加权限请求消息到聊天列表
+                if let requestId = message.requestId {
+                    self.addPermissionRequestMessage(sessionId, requestId, message.toolName ?? "Unknown", message.description)
+                }
                 // 🔔 非当前会话发送权限通知
                 if !isCurrentSession, let requestId = message.requestId {
                     Task {
@@ -253,18 +318,39 @@ class SessionStore: ObservableObject {
                     }
                 }
 
-            case .question:
+            case .question, .questions:  // questions 是桌面端发送的格式
                 self.sessionStatuses[sessionId] = .questionPending
                 // 更新灵动岛 - 统一显示为"工作中"
                 self.updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待回答...")
+
+                // 支持两种格式：直接字段格式和 questions 数组格式
+                var questionId: String
+                var questionText: String
+                var options: [String]
+
+                if let questions = message.questions, let firstQuestion = questions.first {
+                    // 桌面端发送的 questions 数组格式
+                    questionId = UUID().uuidString
+                    questionText = firstQuestion.question ?? ""
+                    options = firstQuestion.options?.compactMap { $0.label } ?? []
+                    print("[SessionStore] ❓ Global questions array: \(questionText), options: \(options)")
+                } else {
+                    // 直接字段格式
+                    questionId = message.questionId ?? UUID().uuidString
+                    questionText = message.questionText ?? ""
+                    options = message.options ?? []
+                }
+
+                self.addQuestionMessage(sessionId, questionId, questionText, options)
+
                 // 🔔 非当前会话发送问题通知
-                if !isCurrentSession, let questionId = message.questionId {
+                if !isCurrentSession {
                     Task {
                         await NotificationService.shared.sendQuestionNotification(
                             sessionId: sessionId,
                             questionId: questionId,
-                            question: message.questionText ?? "",
-                            options: message.options ?? []
+                            question: questionText,
+                            options: options
                         )
                     }
                 }
@@ -272,6 +358,13 @@ class SessionStore: ObservableObject {
             case .tokenUsage:
                 if let percentage = message.percentage {
                     self.contextUsages[sessionId] = Int(percentage * 100)
+                }
+
+            case .taskList, .taskUpdate:
+                // 任务列表消息
+                if let tasks = message.tasks {
+                    self.addTaskListMessage(sessionId, tasks)
+                    print("[SessionStore] 📋 Task list received: \(tasks.count) tasks")
                 }
 
             case .userMessageEcho:
@@ -300,7 +393,7 @@ class SessionStore: ObservableObject {
                         print("[SessionStore] ✅ Added user message to session \(sessionId)")
 
                         // 通知 UI 刷新
-                        self.objectWillChange.send()
+                        self.notifyChanged()
                     } else {
                         print("[SessionStore] ⏭️ Skipping duplicate user message for session \(sessionId)")
                     }
@@ -398,7 +491,15 @@ class SessionStore: ObservableObject {
             return
         }
 
-        switch wsMessage.type {
+        // 处理 type 为 nil 的情况
+        var msgType = wsMessage.type
+        if msgType == nil && wsMessage.questions != nil {
+            msgType = .questions
+        }
+
+        guard let msgType = msgType else { return }
+
+        switch msgType {
         case .contentStart:
             print("[SessionStore] ▶️ Content start, blockType: \(wsMessage.blockType ?? "nil")")
             // 如果是助手消息开始，先清理流式状态
@@ -422,6 +523,8 @@ class SessionStore: ObservableObject {
             if let toolName = wsMessage.toolName {
                 print("[SessionStore] 🔧 Tool complete: \(toolName)")
                 addToolUseMessage(sessionId, toolName, wsMessage.toolUseId, wsMessage.input, .completed)
+                // 拦截任务相关工具调用
+                handleTaskToolCall(sessionId, toolName: wsMessage.toolName, input: wsMessage.input)
             }
 
         case .toolResult:
@@ -449,9 +552,19 @@ class SessionStore: ObservableObject {
                 addPermissionRequestMessage(sessionId, requestId, wsMessage.toolName ?? "", wsMessage.description)
             }
 
-        case .question:
-            if let questionId = wsMessage.questionId {
-                print("[SessionStore] ❓ Question: \(wsMessage.questionText ?? "")")
+        case .question, .questions:  // questions 是桌面端发送的格式
+            print("[SessionStore] ❓ Received question message")
+            // 支持两种格式：直接字段格式和 questions 数组格式
+            if let questions = wsMessage.questions, let firstQuestion = questions.first {
+                // 桌面端发送的 questions 数组格式
+                let questionId = UUID().uuidString
+                let questionText = firstQuestion.question ?? ""
+                let options = firstQuestion.options?.compactMap { $0.label } ?? []
+                print("[SessionStore] ❓ Questions array format: \(questionText), options: \(options)")
+                addQuestionMessage(sessionId, questionId, questionText, options)
+            } else {
+                // 直接字段格式
+                let questionId = wsMessage.questionId ?? UUID().uuidString
                 addQuestionMessage(sessionId, questionId, wsMessage.questionText ?? "", wsMessage.options ?? [])
             }
 
@@ -464,6 +577,12 @@ class SessionStore: ObservableObject {
         case .tokenUsage:
             if let percentage = wsMessage.percentage {
                 contextUsages[sessionId] = Int(percentage * 100)
+            }
+
+        case .taskList, .taskUpdate:
+            if let tasks = wsMessage.tasks {
+                addTaskListMessage(sessionId, tasks)
+                print("[SessionStore] 📋 Task list received: \(tasks.count) tasks")
             }
 
         case .sessionTitleUpdated:
@@ -497,6 +616,9 @@ class SessionStore: ObservableObject {
                 addMessage(sessionId, userMessage)
                 saveMessagesToLocal(sessionId)
             }
+
+        case .unknown:
+            print("[SessionStore] ⚠️ Unknown message type received, ignoring")
         }
     }
 
@@ -664,6 +786,181 @@ class SessionStore: ObservableObject {
         addMessage(sessionId, message)
         sessionStatuses[sessionId] = .questionPending
         print("[SessionStore] ❓ Added question message: \(questionId)")
+    }
+
+    // MARK: - 任务工具调用拦截
+
+    private static let TASK_TOOL_NAMES: Set<String> = ["TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]
+
+    /// 拦截任务相关工具调用（供 ChatView 调用）
+    func handleTaskToolCallPublic(_ sessionId: String, toolName: String?, input: [String: AnyCodable]?) {
+        handleTaskToolCall(sessionId, toolName: toolName, input: input)
+    }
+
+    /// 拦截任务相关工具调用，提取任务数据更新到面板
+    private func handleTaskToolCall(_ sessionId: String, toolName: String?, input: [String: AnyCodable]?) {
+        guard let toolName = toolName, Self.TASK_TOOL_NAMES.contains(toolName) else { return }
+
+        print("[SessionStore] 📋 Task tool detected: \(toolName), input keys: \(input != nil ? Array(input!.keys) : [])")
+
+        switch toolName {
+        case "TodoWrite":
+            if let input = input, let todosAnyCodable = input["todos"] {
+                print("[SessionStore] 📋 todos raw type: \(type(of: todosAnyCodable.value))")
+                print("[SessionStore] 📋 todos raw value: \(String(describing: todosAnyCodable.value).prefix(500))")
+                let tasks = parseTodoItems(todosAnyCodable)
+                if !tasks.isEmpty {
+                    sessionTasks[sessionId] = tasks
+                    taskBarDismissed = false
+                    notifyChanged()
+                    print("[SessionStore] 📋 TodoWrite parsed: \(tasks.count) tasks")
+                } else {
+                    print("[SessionStore] 📋 TodoWrite: failed to parse any tasks from input")
+                }
+            } else {
+                print("[SessionStore] 📋 TodoWrite: no input or no 'todos' key")
+            }
+
+        case "TaskCreate", "TaskUpdate", "TaskList":
+            Task {
+                await refreshSessionTasks(sessionId)
+            }
+
+        default:
+            break
+        }
+    }
+
+    /// 从 AnyCodable 解析 TodoWrite 的 todos 数组，兼容多种内部类型
+    private func parseTodoItems(_ todosCodable: AnyCodable) -> [TaskItem] {
+        var tasks: [TaskItem] = []
+
+        // 尝试1: 直接转 [[String: Any]]
+        if let dictArray = todosCodable.value as? [[String: Any]] {
+            for (index, todo) in dictArray.enumerated() {
+                if let task = makeTaskItem(from: todo, id: "\(index + 1)") {
+                    tasks.append(task)
+                }
+            }
+            if !tasks.isEmpty { return tasks }
+        }
+
+        // 尝试2: [Any] 再逐个转 [String: Any]
+        if let anyArray = todosCodable.value as? [Any] {
+            for (index, item) in anyArray.enumerated() {
+                if let dict = item as? [String: Any],
+                   let task = makeTaskItem(from: dict, id: "\(index + 1)") {
+                    tasks.append(task)
+                }
+            }
+            if !tasks.isEmpty { return tasks }
+        }
+
+        // 尝试3: [AnyCodable] — JSON 解码后数组元素可能是 AnyCodable
+        if let codableArray = todosCodable.value as? [AnyCodable] {
+            for (index, item) in codableArray.enumerated() {
+                if let dict = item.value as? [String: Any],
+                   let task = makeTaskItem(from: dict, id: "\(index + 1)") {
+                    tasks.append(task)
+                }
+            }
+            if !tasks.isEmpty { return tasks }
+        }
+
+        // 尝试4: 通过 JSON 序列化/反序列化兜底
+        if let data = try? JSONEncoder().encode(AnyCodable(value: todosCodable.value)),
+           let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            for (index, todo) in jsonArray.enumerated() {
+                if let task = makeTaskItem(from: todo, id: "\(index + 1)") {
+                    tasks.append(task)
+                }
+            }
+            if !tasks.isEmpty { return tasks }
+        }
+
+        return tasks
+    }
+
+    /// 从字典构建 TaskItem
+    private func makeTaskItem(from dict: [String: Any], id: String) -> TaskItem? {
+        guard let content = dict["content"] as? String, !content.isEmpty else { return nil }
+        let statusStr = dict["status"] as? String ?? "pending"
+        let activeForm = dict["activeForm"] as? String
+        let owner = dict["owner"] as? String
+        let status: TaskStatus = switch statusStr {
+            case "completed": .completed
+            case "in_progress": .inProgress
+            case "failed": .failed
+            default: .pending
+        }
+        return TaskItem(id: id, content: content, status: status, activeForm: activeForm, owner: owner)
+    }
+
+    /// 从服务器刷新会话任务列表
+    @MainActor
+    func refreshSessionTasks(_ sessionId: String) async {
+        do {
+            let data = try await APIService.shared.request("/api/sessions/\(sessionId)/tasks")
+            let response = try JSONDecoder().decode(TasksListResponse.self, from: data)
+            let tasks = response.tasks.map { task in
+                let status: TaskStatus = switch task.status {
+                    case "completed": .completed
+                    case "in_progress": .inProgress
+                    case "failed": .failed
+                    default: .pending
+                }
+                return TaskItem(
+                    id: task.id,
+                    content: task.subject,
+                    status: status,
+                    activeForm: task.activeForm,
+                    owner: task.owner
+                )
+            }
+            if !tasks.isEmpty {
+                sessionTasks[sessionId] = tasks
+                taskBarDismissed = false
+                notifyChanged()
+                print("[SessionStore] 📋 Refreshed tasks from API: \(tasks.count)")
+            }
+        } catch {
+            print("[SessionStore] 📋 Failed to refresh tasks: \(error)")
+        }
+    }
+
+    private func addTaskListMessage(_ sessionId: String, _ tasks: [TaskItem]) {
+        // 更新独立任务状态（用于底部折叠面板）
+        sessionTasks[sessionId] = tasks
+        // 有新任务时重置关闭状态
+        if !tasks.isEmpty {
+            taskBarDismissed = false
+        }
+        notifyChanged()
+        print("[SessionStore] 📋 Updated session tasks: \(tasks.count) tasks for session \(sessionId)")
+    }
+
+    /// 获取当前会话的任务列表
+    func getCurrentTasks() -> [TaskItem] {
+        guard let sessionId = currentSessionId else { return [] }
+        return sessionTasks[sessionId] ?? []
+    }
+
+    /// 切换任务面板展开/收起
+    func toggleTaskBarExpanded() {
+        taskBarExpanded.toggle()
+    }
+
+    /// 用户关闭任务面板
+    func dismissTaskBar() {
+        taskBarDismissed = true
+        taskBarExpanded = false
+    }
+
+    /// 清除会话任务
+    func clearSessionTasks(_ sessionId: String) {
+        sessionTasks.removeValue(forKey: sessionId)
+        taskBarExpanded = false
+        taskBarDismissed = false
     }
 
     // MARK: - API 操作
@@ -876,6 +1173,9 @@ class SessionStore: ObservableObject {
 
     func setCurrentSession(_ id: String?) {
         currentSessionId = id
+        // 切换会话时重置任务面板状态
+        taskBarExpanded = false
+        taskBarDismissed = false
     }
 
     func addMessage(_ sessionId: String, _ message: Message) {
@@ -914,7 +1214,7 @@ class SessionStore: ObservableObject {
             )
             saveSessions()
             // 触发 UI 刷新
-            objectWillChange.send()
+            notifyChanged()
         }
     }
 
@@ -1051,14 +1351,12 @@ class SessionStore: ObservableObject {
         print("[SessionStore] 📤 sendMessage: sessionId=\(sessionId), globalWSSubscribed=\(globalWSSubscribed)")
         print("[SessionStore] 📤 globalConnections: \(webSocketService.globalConnections.keys)")
 
-        // 🎯 发送消息时立即启动灵动岛
+        // 🎯 发送消息时立即启动灵动岛（使用新的多会话 API）
         let sessionTitle = sessions.first { $0.id == sessionId }?.title ?? "对话"
         print("[LiveActivity] 🚀 Starting activity on sendMessage")
-        LiveActivityService.shared.startActivity(
+        LiveActivityService.shared.sessionStartedWorking(
             sessionId: sessionId,
-            sessionTitle: sessionTitle,
-            initialStatus: .working,
-            initialStatusText: "发送中..."
+            sessionTitle: sessionTitle
         )
 
         let message = OutgoingMessage.userMessage(content)
@@ -1098,6 +1396,34 @@ class SessionStore: ObservableObject {
         }
     }
 
+    /// 切换会话权限模式
+    func changePermissionMode(_ mode: PermissionMode) {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ changePermissionMode: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 🔐 Changing permission mode to: \(mode.rawValue) for session: \(sessionId)")
+
+        // 更新本地状态
+        sessionPermissionModes[sessionId] = mode
+
+        // 发送到桌面端
+        let message = OutgoingMessage.setPermissionMode(mode)
+        if globalWSSubscribed {
+            _ = webSocketService.sendGlobal(sessionId: sessionId, message: message)
+        } else {
+            webSocketService.send(message)
+        }
+
+        print("[SessionStore] ✅ Permission mode changed to: \(mode.displayName)")
+    }
+
+    /// 获取当前会话的权限模式
+    func getCurrentPermissionMode() -> PermissionMode {
+        guard let sessionId = currentSessionId else { return .default }
+        return sessionPermissionModes[sessionId] ?? .default
+    }
+
     func stopGeneration() {
         guard let sessionId = currentSessionId else { return }
         let message = OutgoingMessage.stop()
@@ -1132,6 +1458,154 @@ class SessionStore: ObservableObject {
         let questionId = "test-question-\(UUID().uuidString.prefix(8))"
         addQuestionMessage(sessionId, questionId, "请选择一个选项进行测试", ["选项 A", "选项 B", "选项 C"])
         updateLiveActivity(sessionId: sessionId, status: .working, statusText: "等待回答...")
+    }
+
+    /// 模拟桌面端发送的问题请求（通过 WebSocket 格式）
+    func simulateDesktopQuestionRequest() {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ simulateDesktopQuestionRequest: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 🧪 Simulating DESKTOP question request for session: \(sessionId)")
+
+        // 构造桌面端实际发送的 questions 数组格式
+        let desktopMessage = WSMessage(
+            type: nil,  // 桌面端发送时 type 为 nil
+            text: nil,
+            blockType: nil,
+            toolName: nil,
+            toolUseId: nil,
+            input: nil,
+            content: nil,
+            isError: nil,
+            requestId: nil,
+            description: nil,
+            questionId: nil,
+            questionText: nil,
+            options: nil,
+            sessionId: sessionId,
+            state: nil,
+            verb: nil,
+            timestamp: sharedDateFormatter.string(from: Date()),
+            id: nil,
+            percentage: nil,
+            used: nil,
+            total: nil,
+            title: nil,
+            questions: [
+                QuestionItem(
+                    question: "请选择接下来的操作",
+                    header: nil,
+                    options: [
+                        QuestionOption(label: "继续执行", description: "继续当前任务流程"),
+                        QuestionOption(label: "撤销修改", description: "回退到上一步操作"),
+                        QuestionOption(label: "查看详情", description: "查看当前步骤的详细信息")
+                    ],
+                    multiSelect: false
+                )
+            ]
+        )
+
+        // 通过和真实 WebSocket 消息相同的处理流程
+        handleGlobalWSMessage(sessionId: sessionId, message: desktopMessage)
+        print("[SessionStore] ✅ Desktop question request injected")
+    }
+
+    /// 模拟桌面端发送的权限请求（通过 WebSocket 格式）
+    func simulateDesktopPermissionRequest() {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ simulateDesktopPermissionRequest: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 🧪 Simulating DESKTOP permission request for session: \(sessionId)")
+
+        let desktopMessage = WSMessage(
+            type: .permissionRequest,
+            text: nil,
+            blockType: nil,
+            toolName: "Bash",
+            toolUseId: nil,
+            input: nil,
+            content: nil,
+            isError: nil,
+            requestId: "test-desktop-permission-\(UUID().uuidString.prefix(8))",
+            description: "执行命令: git push origin main",
+            questionId: nil,
+            questionText: nil,
+            options: nil,
+            sessionId: sessionId,
+            state: nil,
+            verb: nil,
+            timestamp: sharedDateFormatter.string(from: Date()),
+            id: nil,
+            percentage: nil,
+            used: nil,
+            total: nil,
+            title: nil,
+            questions: nil
+        )
+
+        handleGlobalWSMessage(sessionId: sessionId, message: desktopMessage)
+        print("[SessionStore] ✅ Desktop permission request injected")
+    }
+
+    /// 模拟任务列表（用于测试 UI）- 每次调用随机生成不同场景
+    func simulateTaskList() {
+        guard let sessionId = currentSessionId else {
+            print("[SessionStore] ❌ simulateTaskList: no currentSessionId")
+            return
+        }
+        print("[SessionStore] 🧪 Simulating task list for session: \(sessionId)")
+
+        let scenarios: [[TaskItem]] = [
+            // 场景1：进行中 - 部分完成（带 activeForm 和 owner）
+            [
+                TaskItem(id: "1", content: "用户认证模块开发", status: .completed, owner: "Claude"),
+                TaskItem(id: "2", content: "修复 WebSocket 断连重试问题", status: .completed, owner: "Claude"),
+                TaskItem(id: "3", content: "聊天消息列表性能优化", status: .inProgress, activeForm: "优化消息列表", owner: "Claude"),
+                TaskItem(id: "4", content: "添加深色模式支持", status: .pending),
+                TaskItem(id: "5", content: "单元测试覆盖率提升至 80%", status: .pending)
+            ],
+            // 场景2：全部完成
+            [
+                TaskItem(id: "1", content: "读取配置文件", status: .completed),
+                TaskItem(id: "2", content: "解析用户输入参数", status: .completed),
+                TaskItem(id: "3", content: "调用 API 获取数据", status: .completed),
+                TaskItem(id: "4", content: "处理返回结果", status: .completed),
+                TaskItem(id: "5", content: "生成响应内容", status: .completed)
+            ],
+            // 场景3：刚起步 - 全部待处理
+            [
+                TaskItem(id: "1", content: "搭建项目基础架构", status: .pending),
+                TaskItem(id: "2", content: "集成 CI/CD 流水线", status: .pending),
+                TaskItem(id: "3", content: "编写核心业务逻辑", status: .pending),
+                TaskItem(id: "4", content: "接入第三方支付 SDK", status: .pending)
+            ],
+            // 场景4：有失败项
+            [
+                TaskItem(id: "1", content: "数据库迁移脚本", status: .completed),
+                TaskItem(id: "2", content: "部署到测试环境", status: .completed),
+                TaskItem(id: "3", content: "运行集成测试", status: .failed),
+                TaskItem(id: "4", content: "修复测试失败用例", status: .inProgress, activeForm: "修复集成测试"),
+                TaskItem(id: "5", content: "重新运行测试", status: .pending),
+                TaskItem(id: "6", content: "部署到生产环境", status: .pending)
+            ],
+            // 场景5：多项进行中
+            [
+                TaskItem(id: "1", content: "设计数据库表结构", status: .completed),
+                TaskItem(id: "2", content: "实现用户注册接口", status: .inProgress, activeForm: "开发注册接口", owner: "Claude"),
+                TaskItem(id: "3", content: "实现用户登录接口", status: .inProgress, activeForm: "开发登录接口", owner: "用户"),
+                TaskItem(id: "4", content: "添加 Token 刷新逻辑", status: .pending),
+                TaskItem(id: "5", content: "接入生物识别快捷登录", status: .pending),
+                TaskItem(id: "6", content: "编写接口文档", status: .pending),
+                TaskItem(id: "7", content: "补充单元测试", status: .pending)
+            ]
+        ]
+
+        let tasks = scenarios.randomElement()!
+
+        addTaskListMessage(sessionId, tasks)
+        print("[SessionStore] 📋 Added task list with \(tasks.count) tasks")
     }
 
     // MARK: - 导入会话
@@ -1177,35 +1651,31 @@ class SessionStore: ObservableObject {
 
     // MARK: - 灵动岛更新
 
-    /// 更新灵动岛状态
+    /// 更新灵动岛状态（使用新的多会话聚合 API）
     private func updateLiveActivity(sessionId: String, status: ClaudeWorkStatus, statusText: String) {
-        print("[LiveActivity] 🔄 updateLiveActivity called - sessionId: \(sessionId), currentSessionId: \(currentSessionId ?? "nil"), status: \(status.rawValue)")
+        print("[LiveActivity] 🔄 updateLiveActivity called - sessionId: \(sessionId), status: \(status.rawValue)")
 
-        // 如果是当前会话，启动或更新灵动岛
-        if currentSessionId == sessionId {
-            let sessionTitle = sessions.first { $0.id == sessionId }?.title ?? "对话"
-            print("[LiveActivity] ✅ Session match! Title: \(sessionTitle)")
+        let sessionTitle = sessions.first { $0.id == sessionId }?.title ?? "对话"
 
-            // 检查灵动岛是否已启动，或者是否需要重置（从 completed 状态开始新工作）
-            let currentStatus = LiveActivityService.shared.currentStatus
-            let needsRestart = LiveActivityService.shared.currentActivity == nil || currentStatus == .completed
+        switch status {
+        case .working:
+            // 会话开始工作
+            LiveActivityService.shared.sessionStartedWorking(
+                sessionId: sessionId,
+                sessionTitle: sessionTitle
+            )
 
-            print("[LiveActivity] 📊 currentStatus: \(currentStatus?.rawValue ?? "nil"), needsRestart: \(needsRestart)")
+        case .completed:
+            // 会话完成
+            let lastMsg = messages[sessionId]?.last(where: { $0.type == .assistant })?.content ?? ""
+            LiveActivityService.shared.sessionCompleted(
+                sessionId: sessionId,
+                lastMessage: lastMsg
+            )
 
-            if needsRestart {
-                print("[LiveActivity] 🚀 Starting new activity with status: \(status.rawValue)")
-                LiveActivityService.shared.startActivity(
-                    sessionId: sessionId,
-                    sessionTitle: sessionTitle,
-                    initialStatus: status,
-                    initialStatusText: statusText
-                )
-            } else {
-                print("[LiveActivity] 📝 Updating existing activity to: \(status.rawValue)")
-                LiveActivityService.shared.updateStatus(status: status, statusText: statusText)
-            }
-        } else {
-            print("[LiveActivity] ⏭️ Session not current, skipping")
+        case .idle:
+            // 会话空闲
+            LiveActivityService.shared.sessionBecameIdle(sessionId: sessionId)
         }
     }
 
